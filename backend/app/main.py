@@ -434,3 +434,9 @@ def export_xlsx(job_id: str):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+@app.get("/_version")
+def version():
+    return {
+        "commit": "04ab15b",
+        "env": "render",
+    }
