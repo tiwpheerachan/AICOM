@@ -1150,7 +1150,7 @@
     const backendUrlInput = el("backendUrl");
     const backendSelect = el("backendSelect");
 
-    const DEFAULT_BACKEND = "https://ai-1-dq7u.onrender.com";
+    const DEFAULT_BACKEND = "https://ooo-taen.onrender.com";
     const saved = localStorage.getItem("peak_backend_url");
     setBackendUrl(saved || DEFAULT_BACKEND);
 
