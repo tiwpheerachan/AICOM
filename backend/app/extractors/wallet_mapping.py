@@ -1,4 +1,3 @@
-# backend/app/extractors/wallet_mapping.py
 from __future__ import annotations
 
 """
@@ -9,9 +8,11 @@ Goal:
 - Use our company (client_tax_id) + seller/shop identity to map reliably
 
 Design:
-- Primary key: seller_id (digits)
+- Accept seller/shop id that can be:
+    * Digits (Shopee seller_id)
+    * Alphanumeric (Lazada seller_id like TH1..., TikTok like THLC...)
 - Fallback: shop_name / label keywords (normalized string)
-- Optional: extract seller_id from OCR text ("Seller ID: ...", "Shop ID=...")
+- Optional: extract seller/shop id from OCR text (patterns)
 - Robust normalization (Thai digits, whitespace, punctuation)
 
 Behavior:
@@ -30,38 +31,50 @@ CLIENT_SHD = "0105563022918"
 CLIENT_TOPONE = "0105565027615"
 
 # ============================================================
-# Wallet mappings by seller_id (digits only)
+# Wallet mappings by seller/shop id (key is normalized id)
+# - Shopee: digits string
+# - Lazada/TikTok: alphanumeric like TH1..., THLC...
 # ============================================================
 
 # Rabbit wallets
 RABBIT_WALLET_BY_SELLER_ID: Dict[str, str] = {
-    "253227155": "EWL001",          # Shopee-70mai
-    "235607098": "EWL002",          # Shopee-ddpai
-    "516516644": "EWL003",          # Shopee-jimmy
-    "1443909809": "EWL004",         # Shopee-mibro
-    "1232116856": "EWL005",         # Shopee-MOVA
-    "1357179095": "EWL006",         # Shopee-toptoy
-    "1416156484": "EWL007",         # Shopee-uwant
-    "418530715": "EWL008",          # Shopee-wanbo
-    "349400909": "EWL009",          # Shopee-zepp
-    "142025022504068027": "EWL010", # Rabbit (Rabbit)
+    "253227155": "EWL001",
+    "235607098": "EWL002",
+    "516516644": "EWL003",
+    "1443909809": "EWL004",
+    "1232116856": "EWL005",
+    "1357179095": "EWL006",
+    "1416156484": "EWL007",
+    "418530715": "EWL008",
+    "349400909": "EWL009",
+    "142025022504068027": "EWL010",
 }
 
 # SHD wallets
 SHD_WALLET_BY_SELLER_ID: Dict[str, str] = {
-    "628286975": "EWL001",          # Shopee-ankerthailandstore
-    "340395201": "EWL002",          # Shopee-dreamofficial
-    "383844799": "EWL003",          # Shopee-levoitofficialstore
-    "261472748": "EWL004",          # Shopee-soundcoreofficialstore
-    "517180669": "EWL005",          # xiaomismartappliances
-    "426162640": "EWL006",          # Shopee-xiaomi.thailand
-    "231427130": "EWL007",          # xiaomi_home_appliances
-    "1646465545": "EWL008",         # Shopee-nextgadget
+    "628286975": "EWL001",
+    "340395201": "EWL002",
+    "383844799": "EWL003",
+    "261472748": "EWL004",
+    "517180669": "EWL005",
+    "426162640": "EWL006",
+    "231427130": "EWL007",
+    "1646465545": "EWL008",
 }
 
-# TopOne wallets
+# TOPONE wallets (เพิ่มครบตามที่คุณให้มา)
 TOPONE_WALLET_BY_SELLER_ID: Dict[str, str] = {
-    "538498056": "EWL001",          # Shopee-Vinkothailandstore
+    # Shopee (digits)
+    "538498056": "EWL001",  # Vinko Thailand store
+    "503500831": "EWL002",  # New Age Pet official store
+
+    # Lazada (alphanumeric)
+    "TH1K0CDIML": "EWL003",  # Vinko
+    "TH1JSB2Z2K": "EWL004",  # New Age Pet
+
+    # TikTok (alphanumeric)
+    "THLC6LWARA": "EWL005",  # NewAgePet
+    "THLCTGW4XH": "EWL006",  # Vinko Thailand
 }
 
 # ============================================================
@@ -70,13 +83,11 @@ TOPONE_WALLET_BY_SELLER_ID: Dict[str, str] = {
 # ============================================================
 
 RABBIT_WALLET_BY_SHOP_KEYWORD: Dict[str, str] = {
-    # keep explicit/unique first; matching is "contains"
     "shopee-70mai": "EWL001",
     "70mai": "EWL001",
     "shopee-ddpai": "EWL002",
     "ddpai": "EWL002",
     "shopee-jimmy": "EWL003",
-    "shopeejimmy": "EWL003",
     "jimmy": "EWL003",
     "shopee-mibro": "EWL004",
     "mibro": "EWL004",
@@ -107,65 +118,56 @@ SHD_WALLET_BY_SHOP_KEYWORD: Dict[str, str] = {
     "soundcoreofficialstore": "EWL004",
     "soundcore": "EWL004",
     "xiaomismartappliances": "EWL005",
-    "xiaomi smart appliances": "EWL005",
     "shopee-xiaomi.thailand": "EWL006",
     "xiaomi.thailand": "EWL006",
-    "xiaomi thailand": "EWL006",
     "xiaomi_home_appliances": "EWL007",
-    "xiaomi home appliances": "EWL007",
     "shopee-nextgadget": "EWL008",
     "nextgadget": "EWL008",
 }
 
 TOPONE_WALLET_BY_SHOP_KEYWORD: Dict[str, str] = {
+    # Shopee
     "shopee-vinkothailandstore": "EWL001",
     "vinkothailandstore": "EWL001",
     "vinko": "EWL001",
+    "newagepetofficialstore": "EWL002",
+    "new age pet": "EWL002",
+    "newagepet": "EWL002",
+
+    # Lazada
+    "lazada": "",  # ไม่ map ด้วยคำว่า lazada ตรงๆ กัน false positive
+    "th1k0cdiml": "EWL003",
+    "th1jsb2z2k": "EWL004",
+
+    # TikTok
+    "tiktok": "",  # กัน false positive
+    "thlc6lwara": "EWL005",
+    "thlctgw4xh": "EWL006",
 }
 
 # ============================================================
 # Regex for extracting seller/shop ids from OCR text
+# - Shopee: digits
+# - Lazada/TikTok: TH... alphanumeric
 # ============================================================
-
-# NOTE: หลายเอกสารมักเขียนแบบ:
-# - Seller ID: 123456
-# - SellerId 123456
-# - Shop ID=123456
-# - ShopId# 123456
-# - Merchant ID : 123456
-# - shopid 123456
-# และบางทีมี comma/space/dash คั่น
-SELLER_ID_PATTERNS: List[re.Pattern] = [
-    re.compile(r"\bseller\s*(?:id)?\s*[:#=\-]?\s*([0-9๐-๙][0-9๐-๙\s,\-]{4,30})\b", re.IGNORECASE),
-    re.compile(r"\bshop\s*(?:id)?\s*[:#=\-]?\s*([0-9๐-๙][0-9๐-๙\s,\-]{4,30})\b", re.IGNORECASE),
-    re.compile(r"\bmerchant\s*(?:id)?\s*[:#=\-]?\s*([0-9๐-๙][0-9๐-๙\s,\-]{4,30})\b", re.IGNORECASE),
-    re.compile(r"\bstore\s*(?:id)?\s*[:#=\-]?\s*([0-9๐-๙][0-9๐-๙\s,\-]{4,30})\b", re.IGNORECASE),
-]
 
 EWL_RE = re.compile(r"^EWL\d{3}$", re.IGNORECASE)
 
-# ============================================================
-# Normalization helpers
-# ============================================================
-
+# Thai digit normalize
 _TH_DIGITS = "๐๑๒๓๔๕๖๗๘๙"
 _AR_DIGITS = "0123456789"
-_TH2AR = str.maketrans({ _TH_DIGITS[i]: _AR_DIGITS[i] for i in range(10) })
-
+_TH2AR = str.maketrans({_TH_DIGITS[i]: _AR_DIGITS[i] for i in range(10)})
 
 def _thai_digits_to_arabic(s: str) -> str:
     return (s or "").translate(_TH2AR)
-
 
 def _norm_text(s: str) -> str:
     s = (s or "").strip()
     if not s:
         return ""
     s = _thai_digits_to_arabic(s)
-    # unify whitespace/newlines
     s = re.sub(r"\s+", " ", s)
     return s.strip()
-
 
 def _digits_only(s: str) -> str:
     if not s:
@@ -173,43 +175,34 @@ def _digits_only(s: str) -> str:
     s = _thai_digits_to_arabic(str(s))
     return "".join(ch for ch in s if ch.isdigit())
 
-
-def _norm_seller_id(seller_id: str) -> str:
-    # digits only (remove comma/space/hyphen)
-    return _digits_only(seller_id)
-
+def _norm_id_loose(s: str) -> str:
+    """
+    Normalize seller/shop id:
+    - Keep digits-only id as digits
+    - Keep alphanumeric id as uppercase, strip spaces/punct
+    """
+    s = _norm_text(s)
+    if not s:
+        return ""
+    # remove common separators
+    s2 = re.sub(r"[^\w]+", "", s)  # keep A-Z0-9_
+    if not s2:
+        return ""
+    # if looks numeric -> digits only
+    if s2.isdigit():
+        return _digits_only(s2)
+    return s2.upper()
 
 def _norm_shop_name(shop_name: str) -> str:
-    # lower + strip + collapse spaces + remove some punctuation noise
     s = _norm_text(shop_name).lower()
     if not s:
         return ""
-    # keep dots/underscores/hyphens because your keywords use them,
-    # but remove brackets/quotes that often appear in OCR
     s = re.sub(r"[\"'`“”‘’\(\)\[\]\{\}<>]+", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
-
-def _extract_seller_id_from_text(text: str) -> str:
-    t = _norm_text(text).lower()
-    if not t:
-        return ""
-    for rx in SELLER_ID_PATTERNS:
-        m = rx.search(t)
-        if not m:
-            continue
-        raw = m.group(1) or ""
-        sid = _norm_seller_id(raw)
-        # sanity: seller_id usually >= 5 digits
-        if len(sid) >= 5:
-            return sid
-    return ""
-
-
 def _is_valid_wallet(code: str) -> bool:
     return bool(code) and bool(EWL_RE.match(code.strip()))
-
 
 def _client_bucket(client_tax_id: str) -> str:
     d = _digits_only(client_tax_id)
@@ -221,7 +214,6 @@ def _client_bucket(client_tax_id: str) -> str:
         return "TOPONE"
     return ""
 
-
 def _tables_for_client(bucket: str) -> Tuple[Dict[str, str], Dict[str, str]]:
     if bucket == "RABBIT":
         return (RABBIT_WALLET_BY_SELLER_ID, RABBIT_WALLET_BY_SHOP_KEYWORD)
@@ -231,15 +223,9 @@ def _tables_for_client(bucket: str) -> Tuple[Dict[str, str], Dict[str, str]]:
         return (TOPONE_WALLET_BY_SELLER_ID, TOPONE_WALLET_BY_SHOP_KEYWORD)
     return ({}, {})
 
-
 def _match_shop_keyword(shop_norm: str, by_shop: Dict[str, str]) -> str:
-    """
-    Match by 'contains' but do longest-key-first to prevent wrong early hits.
-    """
     if not shop_norm or not by_shop:
         return ""
-
-    # longest-first keys
     keys = sorted((k for k in by_shop.keys() if k), key=len, reverse=True)
     for k in keys:
         code = by_shop.get(k, "")
@@ -247,9 +233,30 @@ def _match_shop_keyword(shop_norm: str, by_shop: Dict[str, str]) -> str:
             continue
         if k in shop_norm:
             return code
-
     return ""
 
+# ---- OCR ID patterns ----
+# Shopee digits:
+_RX_SID_DIGITS = re.compile(r"\b(?:seller|shop|merchant|store)\s*(?:id)?\s*[:#=\-]?\s*([0-9๐-๙][0-9๐-๙\s,\-]{4,30})\b", re.IGNORECASE)
+# Lazada/TikTok code-like:
+_RX_ID_TH = re.compile(r"\b(TH[0-9A-Z]{6,})\b", re.IGNORECASE)
+
+def _extract_id_from_text(text: str) -> str:
+    t = _norm_text(text)
+    if not t:
+        return ""
+    # 1) digits id
+    m = _RX_SID_DIGITS.search(t)
+    if m:
+        raw = m.group(1) or ""
+        sid = _norm_id_loose(raw)
+        if sid and (sid.isdigit() and len(sid) >= 5):
+            return sid
+    # 2) TH... id
+    m2 = _RX_ID_TH.search(t)
+    if m2:
+        return _norm_id_loose(m2.group(1))
+    return ""
 
 # ============================================================
 # Public API
@@ -261,61 +268,45 @@ def resolve_wallet_code(
     shop_name: str = "",
     text: str = "",
 ) -> str:
-    """
-    Resolve wallet code (EWLxxx) using:
-      1) seller_id mapping
-      2) extract seller_id from text (if not provided)
-      3) shop_name keyword mapping
-
-    Returns:
-      - "EWLxxx" if resolved
-      - "" if unknown (caller should mark NEEDS_REVIEW)
-    """
     bucket = _client_bucket(client_tax_id)
     if not bucket:
         return ""
 
-    by_sid, by_shop = _tables_for_client(bucket)
+    by_id, by_shop = _tables_for_client(bucket)
 
-    # 1) direct seller_id
-    sid = _norm_seller_id(seller_id)
+    # 1) direct id
+    sid = _norm_id_loose(seller_id)
     if sid:
-        code = by_sid.get(sid, "")
+        code = by_id.get(sid, "")
         if _is_valid_wallet(code):
             return code
 
-    # 2) extract seller_id from OCR/body text
-    if not sid and text:
-        sid = _extract_seller_id_from_text(text)
+    # 2) extract id from OCR text
+    if (not sid) and text:
+        sid = _extract_id_from_text(text)
         if sid:
-            code = by_sid.get(sid, "")
+            code = by_id.get(sid, "")
             if _is_valid_wallet(code):
                 return code
 
-    # 3) fallback by shop_name keywords
+    # 3) fallback by shop name keyword
     shop_norm = _norm_shop_name(shop_name)
     if shop_norm:
         code = _match_shop_keyword(shop_norm, by_shop)
         if _is_valid_wallet(code):
             return code
 
-    # 4) optional: sometimes shop label appears inside OCR text (not in shop_name field)
-    #    we only use this as last fallback to avoid false positives
+    # 4) last fallback: keyword search in OCR text (riskier)
     if text:
-        t_norm = _norm_shop_name(text)  # reuse same normalization for keyword contains
+        t_norm = _norm_shop_name(text)
         code = _match_shop_keyword(t_norm, by_shop)
         if _is_valid_wallet(code):
             return code
 
     return ""
 
-
 def extract_seller_id_best_effort(text: str) -> str:
-    """
-    Utility: extract seller_id from OCR text.
-    """
-    return _extract_seller_id_from_text(text)
-
+    return _extract_id_from_text(text)
 
 __all__ = [
     "resolve_wallet_code",

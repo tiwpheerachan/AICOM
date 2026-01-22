@@ -5,9 +5,10 @@ import os
 import logging
 import inspect
 import re
+from datetime import datetime
 
 from .classifier import classify_platform
-
+from ..extractors.wallet_mapping import resolve_wallet_code
 from ..extractors.generic import extract_generic
 from ..extractors.shopee import extract_shopee
 from ..extractors.lazada import extract_lazada
@@ -48,6 +49,14 @@ except Exception:  # pragma: no cover
     detect_client_from_context = None  # type: ignore
     _VENDOR_MAPPING_OK = False
 
+# ✅ Wallet / Payment mapping (EWLxxx) (optional)
+try:
+    from ..extractors.wallet_mapping import resolve_wallet_code  # type: ignore
+    _WALLET_MAPPING_OK = True
+except Exception:  # pragma: no cover
+    resolve_wallet_code = None  # type: ignore
+    _WALLET_MAPPING_OK = False
+
 from ..utils.validators import (
     validate_yyyymmdd,
     validate_branch5,
@@ -81,7 +90,7 @@ PLATFORM_GROUPS = {
     "SHOPEE": "Marketplace Expense",
     "LAZADA": "Marketplace Expense",
     "TIKTOK": "Marketplace Expense",
-    "SPX": "Marketplace Expense",  # คุณใช้ Marketplace Expense สำหรับโลจิสติกส์ด้วย
+    "SPX": "Marketplace Expense",  # โลจิสติกส์
     "THAI_TAX": "General Expense",
     "UNKNOWN": "Other Expense",
     "GENERIC": "Other Expense",
@@ -91,8 +100,8 @@ PLATFORM_DESCRIPTIONS = {
     "META": "Meta Ads",
     "GOOGLE": "Google Ads",
     "SHOPEE": "Shopee Marketplace Fee",
-    "LAZADA": "Lazada Marketplace",
-    "TIKTOK": "TikTok Shop",
+    "LAZADA": "Lazada Marketplace Fee",
+    "TIKTOK": "TikTok Shop Fee",
     "SPX": "Shopee Express",
     "THAI_TAX": "Tax Invoice",
     "UNKNOWN": "",
@@ -162,7 +171,13 @@ _RE_ALL_WS = re.compile(r"\s+")
 
 RE_TRS_CORE = re.compile(r"(TRS[A-Z0-9\-_/.]{10,})", re.IGNORECASE)
 RE_RCS_CORE = re.compile(r"(RCS[A-Z0-9\-_/.]{10,})", re.IGNORECASE)
-RE_TTSTH_CORE = re.compile(r"(TTSTH\d{10,})", re.IGNORECASE)
+RE_TTSTH_CORE = re.compile(r"(TTSTH\d{8,})", re.IGNORECASE)
+
+# Lazada invoice no มักเป็น THMPTI...
+RE_LAZ_INVOICE = re.compile(r"\b(THMPTI\d{10,})\b", re.IGNORECASE)
+
+# Generic: 32-hex md5-like (ไฟล์ hash)
+RE_HASH32 = re.compile(r"^[a-f0-9]{32}$", re.IGNORECASE)
 
 RE_LEADING_NOISE_PREFIX = re.compile(
     r"^(?:Shopee-)?TI[VR]-|^Shopee-|^TIV-|^TIR-|^SPX-|^LAZ-|^LZD-|^TikTok-",
@@ -203,7 +218,7 @@ def _normalize_reference_core(value: Any) -> str:
     s = _strip_ext(s)
 
     # ดึง core ถ้ามี
-    for pat in (RE_TRS_CORE, RE_RCS_CORE, RE_TTSTH_CORE):
+    for pat in (RE_TRS_CORE, RE_RCS_CORE, RE_TTSTH_CORE, RE_LAZ_INVOICE):
         m = pat.search(s)
         if m:
             return _compact_no_ws(m.group(1))
@@ -275,6 +290,193 @@ def _merge_rows(base: Dict[str, Any], patch: Dict[str, Any], *, fill_missing: bo
         else:
             out[k] = v
     return out
+
+
+# ============================================================
+# helpers: date parsing (จาก text เท่านั้น)  ✅ HARD LOCK: ห้ามเดาจากชื่อไฟล์
+# ============================================================
+
+RE_DATE_ISO = re.compile(r"\b(20\d{2})[-/](\d{2})[-/](\d{2})\b")
+RE_DATE_THAI_LONG = re.compile(
+    r"(?:Invoice\s*Date|วันที่(?:ใบกำกับ|เอกสาร|ออกเอกสาร)|Date)\s*[:：]?\s*(20\d{2})[-/](\d{2})[-/](\d{2})",
+    re.IGNORECASE,
+)
+
+def _yyyymmdd_from_parts(y: str, m: str, d: str) -> str:
+    try:
+        yy = int(y)
+        mm = int(m)
+        dd = int(d)
+        if yy < 2000 or yy > 2099:
+            return ""
+        if mm < 1 or mm > 12:
+            return ""
+        if dd < 1 or dd > 31:
+            return ""
+        return f"{yy:04d}{mm:02d}{dd:02d}"
+    except Exception:
+        return ""
+
+def _extract_doc_date_from_text(text: str) -> str:
+    """
+    พยายามหา "Invoice Date: YYYY-MM-DD" หรือ "วันที่...: YYYY-MM-DD" จากเนื้อเอกสาร
+    """
+    if not text:
+        return ""
+    m = RE_DATE_THAI_LONG.search(text)
+    if m:
+        return _yyyymmdd_from_parts(m.group(1), m.group(2), m.group(3))
+
+    # fallback: first ISO date in doc (ระวัง false positive แต่ยังดีกว่าเดาจากชื่อไฟล์)
+    m2 = RE_DATE_ISO.search(text)
+    if m2:
+        return _yyyymmdd_from_parts(m2.group(1), m2.group(2), m2.group(3))
+    return ""
+
+
+# ============================================================
+# helpers: invoice/reference extraction from TEXT (กันกรณี Lazada filename เป็น hash)
+# ============================================================
+
+RE_INVNO_BLOCK = re.compile(
+    r"(?:Invoice\s*No\.?|Tax\s*Invoice\s*/\s*Receipt|Receipt\s*No\.?)\s*[:：]?\s*([A-Z0-9\-_/.]{8,})",
+    re.IGNORECASE,
+)
+
+def _extract_reference_candidates_from_text(text: str) -> List[str]:
+    if not text:
+        return []
+    out: List[str] = []
+
+    # Lazada explicit
+    for m in RE_LAZ_INVOICE.finditer(text):
+        out.append(_normalize_reference_core(m.group(1)))
+
+    # Generic invoice no field
+    for m in RE_INVNO_BLOCK.finditer(text):
+        out.append(_normalize_reference_core(m.group(1)))
+
+    # TRS/RCS/TTSTH in text
+    for pat in (RE_TRS_CORE, RE_RCS_CORE, RE_TTSTH_CORE):
+        for m in pat.finditer(text):
+            out.append(_normalize_reference_core(m.group(1)))
+
+    # dedup preserve order
+    seen = set()
+    uniq: List[str] = []
+    for x in out:
+        if x and x not in seen:
+            seen.add(x)
+            uniq.append(x)
+    return uniq
+
+
+def _is_probably_hash(s: str) -> bool:
+    s2 = (s or "").strip()
+    return bool(s2) and bool(RE_HASH32.match(s2))
+
+
+def _score_reference(platform: str, ref: str) -> int:
+    """
+    score สูง = น่าเชื่อถือกว่า
+    """
+    p = (platform or "").upper().strip()
+    r = (ref or "").strip()
+    if not r:
+        return 0
+
+    # หลีกเลี่ยง hash/uuid
+    if _is_probably_hash(r):
+        return 5
+
+    # platform-specific cores
+    if RE_TRS_CORE.match(r):
+        return 100
+    if RE_RCS_CORE.match(r):
+        return 95
+    if RE_TTSTH_CORE.match(r):
+        return 85
+    if RE_LAZ_INVOICE.match(r):
+        return 90
+
+    # Lazada: ถ้าเป็น Marketplace ให้ favor invoice-like token
+    if p == "LAZADA":
+        # Lazada invoice มักยาวและเริ่มด้วย TH...
+        if r.upper().startswith("TH") and len(r) >= 12:
+            return 80
+
+    # general: alnum long
+    if len(r) >= 10 and re.fullmatch(r"[A-Z0-9\-_/.]+", r, flags=re.IGNORECASE):
+        return 60
+
+    return 30
+
+
+def _pick_best_reference(
+    *,
+    platform: str,
+    src_file: str,
+    row: Dict[str, Any],
+    text: str,
+) -> str:
+    """
+    ✅ FIX: ห้าม prefer filename ถ้าเอกสารมี invoice no จริง
+    order ความน่าเชื่อถือ:
+      1) extractor-provided invoice/reference ที่ "ดูมีรูปแบบ"
+      2) invoice/reference ที่ parse ได้จาก TEXT
+      3) filename core (เฉพาะเมื่อไม่ใช่ hash หรือเป็น TRS/RCS/etc)
+    """
+    p = (platform or "").upper().strip()
+
+    cands: List[str] = []
+
+    # 1) from row fields
+    r_c = _normalize_reference_core(row.get("C_reference", ""))
+    r_g = _normalize_reference_core(row.get("G_invoice_no", ""))
+    if r_g:
+        cands.append(r_g)
+    if r_c:
+        cands.append(r_c)
+
+    # 2) from text
+    cands.extend(_extract_reference_candidates_from_text(text))
+
+    # 3) from filename (LAST)
+    ref_from_file = _normalize_reference_core(src_file) if src_file else ""
+    if ref_from_file:
+        cands.append(ref_from_file)
+
+    # dedup preserve order
+    seen = set()
+    uniq: List[str] = []
+    for x in cands:
+        x2 = (x or "").strip()
+        if not x2:
+            continue
+        if x2 not in seen:
+            seen.add(x2)
+            uniq.append(x2)
+
+    if not uniq:
+        return ""
+
+    # choose best by score; tie -> earlier in list wins
+    best = uniq[0]
+    best_score = _score_reference(p, best)
+    for ref in uniq[1:]:
+        sc = _score_reference(p, ref)
+        if sc > best_score:
+            best = ref
+            best_score = sc
+
+    # special: if best is hash but there exists non-hash -> take non-hash
+    if _is_probably_hash(best):
+        for ref in uniq:
+            if ref and not _is_probably_hash(ref):
+                best = ref
+                break
+
+    return _compact_no_ws(best)
 
 
 # ============================================================
@@ -465,6 +667,43 @@ def _apply_vendor_code_mapping(row: Dict[str, Any], text: str, client_tax_id: st
 
 
 # ============================================================
+# Wallet mapping: normalize Q_payment_method (EWLxxx) if available
+# ============================================================
+
+def _apply_payment_method_mapping(row: Dict[str, Any], text: str) -> Dict[str, Any]:
+    if not isinstance(row, dict):
+        return row
+    if not _WALLET_MAPPING_OK or resolve_wallet_code is None:
+        return row
+
+    # ถ้ามีอยู่แล้วและเป็น EWLxxx ให้ถือว่าถูกแล้ว
+    cur = str(row.get("Q_payment_method") or "").strip()
+    if cur and cur.upper().startswith("EWL"):
+        return row
+
+    # build a small context for mapping
+    ctx = {
+        "platform": str(row.get("_platform") or row.get("_platform_route") or "").strip(),
+        "shop_id": str(row.get("shop_id") or row.get("seller_id") or row.get("merchant_id") or "").strip(),
+        "shop_name": str(row.get("shop_name") or row.get("username") or row.get("seller_username") or "").strip(),
+        "filename": str(row.get("_filename") or row.get("filename") or row.get("file") or "").strip(),
+        "text": text or "",
+    }
+
+    try:
+        code = resolve_wallet_code(ctx)  # type: ignore[arg-type]
+    except Exception:
+        code = ""
+
+    if isinstance(code, str) and code.strip():
+        row["Q_payment_method"] = code.strip()
+        if os.getenv("STORE_WALLET_MAPPING_META", "1") == "1":
+            row["_wallet_code_resolved"] = code.strip()
+
+    return row
+
+
+# ============================================================
 # Platform-specific enforcement (กลาง)
 # ============================================================
 
@@ -521,7 +760,7 @@ def lock_peak_columns(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ============================================================
-# ✅ WHT policy helpers (✅/❌ คำนวณภาษีหัก ณ ที่จ่าย)  ✅ FIXED
+# ✅ WHT helpers + doc parsing + policy
 # ============================================================
 
 def _to_float(v: Any) -> float:
@@ -540,7 +779,6 @@ def _to_float(v: Any) -> float:
 
 
 def _fmt_2(v: float) -> str:
-    # เก็บแบบ "8716.68" (ไม่ใส่ comma)
     try:
         return f"{float(v):.2f}"
     except Exception:
@@ -567,10 +805,6 @@ def _parse_vat_rate(v: Any) -> float:
 
 
 def _truthy(v: Any) -> bool:
-    """
-    รองรับหลายรูปแบบ:
-    True/False, 1/0, "1"/"0", "true"/"false", "yes"/"no", "✅"/"❌"
-    """
     if v is None:
         return False
     if isinstance(v, bool):
@@ -583,29 +817,69 @@ def _truthy(v: Any) -> bool:
     return False
 
 
-def _apply_wht_policy(row: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    ✅ FIXED BEHAVIOR (ตามเคส Shopee/SPX ของคุณ):
+# parse WHT from document text (Thai + EN)
+RE_WHT_TH = re.compile(
+    r"(?:หักภาษี\s*ณ\s*ที่จ่าย|ภาษีหัก\s*ณ\s*ที่จ่าย)[^\d%]{0,40}(\d{1,2}(?:\.\d+)?)\s*%[^\d]{0,40}([\d,]+\.\d{2}|\d+)",
+    re.IGNORECASE,
+)
+RE_WHT_EN = re.compile(
+    r"(?:withholding\s*tax)[^\d%]{0,40}(\d{1,2}(?:\.\d+)?)\s*%[^\d]{0,40}([\d,]+\.\d{2}|\d+)",
+    re.IGNORECASE,
+)
 
-    - ถ้า enabled:
-        * คำนวณ P_wht จาก "ยอดรวม VAT" (gross) แบบ:  wht = gross/(1+vat) * rate
-        * แล้วเซ็ต R_paid_amount = gross - wht  (ยอดจ่ายจริงหลังหัก ณ ที่จ่าย)
-        * เซ็ต S_pnd = pnd_when_wht (default "53" หรือคุณจะตั้ง "1" ก็ได้)
-    - ถ้า disabled:
-        * ล้าง P_wht = ""
-        * ไม่แตะ R_paid_amount (ปล่อยตาม extractor)
-        * เซ็ต S_pnd = pnd_when_no_wht (default "53")
+def _extract_wht_from_text(text: str) -> Tuple[float, float]:
+    """
+    returns (rate, amount)
+    """
+    if not text:
+        return (0.0, 0.0)
+
+    m = RE_WHT_TH.search(text)
+    if m:
+        rate = _to_float(m.group(1)) / 100.0
+        amt = _to_float(m.group(2))
+        return (rate, amt)
+
+    m = RE_WHT_EN.search(text)
+    if m:
+        rate = _to_float(m.group(1)) / 100.0
+        amt = _to_float(m.group(2))
+        return (rate, amt)
+
+    return (0.0, 0.0)
+
+
+def _apply_wht_policy(row: Dict[str, Any], cfg: Dict[str, Any], *, text: str = "") -> Dict[str, Any]:
+    """
+    ✅ SMART + CONSISTENT (HARD LOCK compliant):
+    - WHT base ต้องมาจาก Subtotal (ex VAT) เท่านั้น
+    - Paid (R_paid_amount) ต้องเป็นยอดจ่ายหลังหัก ณ ที่จ่าย:
+        R_paid_amount = gross_including_vat - wht_amount
+
+    แหล่ง WHT:
+      1) ถ้า extractor ให้ P_wht มาแล้ว -> ใช้ (default ไม่เขียนทับ)
+      2) ถ้าไม่มี และ cfg.auto_detect_wht=1 -> parse จาก text
+      3) ถ้ายังไม่มี และ cfg.calculate_wht=1 -> คำนวณ fallback: base_ex_vat * rate
+
+    Gross policy:
+      - gross คือ "ยอดรวม VAT" (Total including VAT)
+      - จะพยายามหา gross จาก:
+          a) R_paid_amount (ถ้า extractor ใส่เป็น total incl vat)
+          b) fallback: parse total incl vat จาก text (ถ้ามี helper)
+          c) fallback: ถ้ามี subtotal + vat -> gross = subtotal + vat
+          d) fallback สุดท้าย: N_unit_price (บาง extractor ใส่ total ไว้)
 
     cfg parameters:
       - calculate_wht / wht_enabled: True/False
+      - auto_detect_wht: default True
       - wht_rate: default 0.03
       - pnd_when_wht: default "53"
       - pnd_when_no_wht: default "53"
-      - wht_gross_field: "R_paid_amount" (default) fallback "N_unit_price"
-      - wht_override_existing: "0"/"1" (default "0") ถ้า "1" จะเขียนทับ P_wht ที่มีอยู่
+      - wht_override_existing: default False
     """
     cfg = cfg or {}
-    enabled = _truthy(cfg.get("calculate_wht", cfg.get("wht_enabled")))
+    enabled_calc = _truthy(cfg.get("calculate_wht", cfg.get("wht_enabled")))
+    auto_detect = _truthy(cfg.get("auto_detect_wht", "1"))
     try:
         rate_f = float(cfg.get("wht_rate", 0.03))
     except Exception:
@@ -613,57 +887,110 @@ def _apply_wht_policy(row: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, Any
 
     pnd_when_wht = str(cfg.get("pnd_when_wht", "53")).strip() or "53"
     pnd_when_no = str(cfg.get("pnd_when_no_wht", "53")).strip() or "53"
-    gross_field = str(cfg.get("wht_gross_field", "R_paid_amount")).strip() or "R_paid_amount"
     override_existing = _truthy(cfg.get("wht_override_existing", "0"))
 
-    if not enabled:
-        # ❌ ไม่คำนวณภาษีหัก ณ ที่จ่าย
-        row["P_wht"] = ""
-        if not str(row.get("S_pnd") or "").strip():
-            row["S_pnd"] = pnd_when_no
-        return row
-
-    # ✅ คำนวณภาษีหัก ณ ที่จ่าย
+    text = text or ""
     vat = _parse_vat_rate(row.get("O_vat_rate"))
 
-    # gross (ยอดรวม VAT) — ใช้ R_paid_amount เป็นหลัก, fallback N_unit_price
-    gross = _to_float(row.get(gross_field))
-    if gross <= 0:
-        gross = _to_float(row.get("R_paid_amount"))
-    if gross <= 0:
-        gross = _to_float(row.get("N_unit_price"))
+    # -------------------------
+    # 0) current WHT
+    # -------------------------
+    cur_wht_s = str(row.get("P_wht") or "").strip()
+    cur_wht = _to_float(cur_wht_s)
 
-    # ถ้าไม่มี gross ก็จบ
+    # -------------------------
+    # 1) Resolve gross (incl VAT)
+    # -------------------------
+    gross = _to_float(row.get("R_paid_amount"))  # many extractors put total here
     if gross <= 0:
+        gross = _to_float(row.get("N_unit_price"))  # last fallback
+
+    # Optional: if you have text parsers, use them (safe)
+    # These helpers are assumed to exist in your codebase; if not, remove this block.
+    subtotal_ex = 0.0
+    vat_amt = 0.0
+    try:
+        # If you have a function to extract subtotal/vat/total (recommended)
+        # return (subtotal_ex_vat, vat_amount, total_including_vat)
+        sx, vx, tx = _extract_amounts_summary_from_text(text)  # type: ignore[name-defined]
+        subtotal_ex = _to_float(sx)
+        vat_amt = _to_float(vx)
+        total_incl = _to_float(tx)
+        if gross <= 0 and total_incl > 0:
+            gross = total_incl
+    except Exception:
+        # no parser available → ignore safely
+        pass
+
+    # If still no gross but we have subtotal+vat, compute it
+    if gross <= 0 and subtotal_ex > 0 and vat_amt > 0:
+        gross = subtotal_ex + vat_amt
+
+    # If still none, cannot compute net reliably
+    # (but we can still keep detected WHT)
+    # -------------------------
+    # 2) Detect WHT from text (if missing or override)
+    # -------------------------
+    if auto_detect and (override_existing or cur_wht <= 0.0):
+        detected_rate, detected_amt = _extract_wht_from_text(text)
+        if detected_amt > 0:
+            row["P_wht"] = _fmt_2(round(detected_amt + 1e-9, 2))
+            cur_wht = detected_amt
+            if os.getenv("STORE_WHT_META", "1") == "1":
+                row["_wht_detected_rate"] = f"{float(detected_rate):.4f}"
+                row["_wht_detected_amount"] = _fmt_2(detected_amt)
+
+    # -------------------------
+    # 3) Calc WHT fallback (base ex VAT)
+    # -------------------------
+    if enabled_calc and (override_existing or cur_wht <= 0.0):
+        # determine base_ex_vat
+        base_ex_vat = 0.0
+
+        # prefer parsed subtotal_ex if available
+        if subtotal_ex > 0:
+            base_ex_vat = subtotal_ex
+        elif gross > 0:
+            base_ex_vat = gross / (1.0 + vat) if vat > 0 else gross
+
+        if base_ex_vat > 0:
+            wht_amount = base_ex_vat * rate_f
+            if wht_amount < 0:
+                wht_amount = 0.0
+            wht_amount = round(wht_amount + 1e-9, 2)
+            row["P_wht"] = _fmt_2(wht_amount)
+            cur_wht = wht_amount
+            if os.getenv("STORE_WHT_META", "1") == "1":
+                row["_wht_calc_rate"] = f"{rate_f:.4f}"
+                row["_wht_calc_base_ex_vat"] = _fmt_2(round(base_ex_vat + 1e-9, 2))
+
+    # -------------------------
+    # 4) Apply net paid = gross - wht (IMPORTANT)
+    # -------------------------
+    if cur_wht > 0:
+        if gross > 0:
+            if os.getenv("STORE_WHT_META", "1") == "1":
+                row["_gross_amount_before_wht"] = _fmt_2(round(gross + 1e-9, 2))
+
+            net = gross - cur_wht
+            if net < 0:
+                net = 0.0
+            row["R_paid_amount"] = _fmt_2(round(net + 1e-9, 2))
+
+        # set PND when WHT exists
         if not str(row.get("S_pnd") or "").strip():
             row["S_pnd"] = pnd_when_wht
         return row
 
-    cur_wht_s = str(row.get("P_wht") or "").strip()
-    cur_wht = _to_float(cur_wht_s)
-
-    # ตัดสินใจว่าจะคำนวณ/เขียนทับไหม
-    should_calc = override_existing or (not cur_wht_s) or (cur_wht <= 0)
-
-    if should_calc:
-        base_ex_vat = gross / (1.0 + vat) if vat > 0 else gross
-        wht_amount = base_ex_vat * rate_f
-        if wht_amount < 0:
-            wht_amount = 0.0
-        wht_amount = round(wht_amount + 1e-9, 2)  # กัน floating edge
-        row["P_wht"] = _fmt_2(wht_amount)
-    else:
-        # ใช้ค่าเดิมที่มีอยู่
-        wht_amount = cur_wht
-
-    # ✅ FIX: Paid = Gross - WHT (ยอดจ่ายจริงหลังหัก ณ ที่จ่าย)
-    net = gross - wht_amount
-    if net < 0:
-        net = 0.0
-    row["R_paid_amount"] = _fmt_2(round(net + 1e-9, 2))
+    # -------------------------
+    # 5) No WHT
+    # -------------------------
+    # If WHT not enabled and none detected -> keep empty
+    if not enabled_calc and not cur_wht_s:
+        row["P_wht"] = ""
 
     if not str(row.get("S_pnd") or "").strip():
-        row["S_pnd"] = pnd_when_wht
+        row["S_pnd"] = pnd_when_no
 
     return row
 
@@ -673,11 +1000,6 @@ def _apply_wht_policy(row: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, Any
 # ============================================================
 
 def _resolve_client_tax_id(text: str, client_tax_id: str, cfg: Dict[str, Any]) -> str:
-    """
-    ✅ FIX: รองรับ cfg หลายรูปแบบ
-      - client_tax_id
-      - client_tax_ids (list/str) -> ถ้ามีตัวเดียวใช้เลย / ถ้ามีหลายตัวเลือกตาม tag หรือ fallback ตัวแรก
-    """
     ctax = (client_tax_id or "").strip()
     if ctax:
         return ctax
@@ -687,10 +1009,7 @@ def _resolve_client_tax_id(text: str, client_tax_id: str, cfg: Dict[str, Any]) -
         filename=cfg.get("_filename", "") if isinstance(cfg, dict) else "",
         text=text,
     )
-    if ctax:
-        return ctax
-
-    return ""
+    return (ctax or "").strip()
 
 
 def _resolve_company_name(client_tax_id: str, cfg: Dict[str, Any]) -> str:
@@ -719,7 +1038,7 @@ def _resolve_gl_code(client_tax_id: str, platform: str, row: Dict[str, Any], cfg
         1) {"0105...": "520317"}
         2) {"0105...": {"MARKETPLACE":"520317","ADS":"520201","DEFAULT":"520203"}}
     - หรือ env: GL_CODE_RABBIT/SHD/TOPONE
-    - ถ้าไม่มีจริงๆ fallback เป็น U_group เพื่อไม่ให้ K_account ว่าง
+    - ถ้าไม่มีจริงๆ fallback เป็น U_group
     """
     # 1) cfg map
     mp = cfg.get("gl_code_map")
@@ -747,7 +1066,7 @@ def _resolve_gl_code(client_tax_id: str, platform: str, row: Dict[str, Any], cfg
     if cur:
         return cur
 
-    # 4) last fallback: use group (กัน import พังเพราะว่าง)
+    # 4) last fallback: use group
     grp = str(row.get("U_group") or "").strip()
     return grp
 
@@ -807,7 +1126,7 @@ def _build_description_structure(
 
 
 # ============================================================
-# ✅ FINALIZE (THE IMPORTANT PART)
+# ✅ FINALIZE (THE IMPORTANT PART) — SMART & DETERMINISTIC
 # ============================================================
 
 def finalize_row(
@@ -822,11 +1141,18 @@ def finalize_row(
     row = _sanitize_incoming_row(row)
     p = (platform or "UNKNOWN").upper().strip()
     cfg = cfg or {}
+    text = text or ""
 
     # policy: T_note must be empty
     row["T_note"] = ""
 
-    # resolve client tax id + company (✅ FIX)
+    # ✅ Ensure doc date from TEXT if missing (HARD LOCK: not from filename)
+    if not str(row.get("B_doc_date") or "").strip():
+        dd = _extract_doc_date_from_text(text)
+        if dd:
+            row["B_doc_date"] = dd
+
+    # resolve client tax id + company
     ctax = _resolve_client_tax_id(text, client_tax_id, cfg)
     if ctax and not str(row.get("A_company_name") or "").strip():
         row["A_company_name"] = _resolve_company_name(ctax, cfg)
@@ -834,22 +1160,13 @@ def finalize_row(
     # enforce platform rules (group/desc/vat defaults)
     row = _enforce_platform_rules(row, p)
 
-    # ✅ keep P_wht (don't wipe). Ensure exists (ก่อน policy จะจัดการ)
-    if row.get("P_wht") is None:
-        row["P_wht"] = ""
-    else:
-        row["P_wht"] = str(row.get("P_wht") or "").strip()
-
-    # ✅ normalize references (prefer filename core)
+    # ✅ normalize references (SMART: doc > text > filename; avoid hash)
     src_file = _try_get_source_filename(filename, row)
-    ref_from_file = _normalize_reference_core(src_file) if src_file else ""
-    ref_c = _normalize_reference_core(row.get("C_reference", ""))
-    ref_g = _normalize_reference_core(row.get("G_invoice_no", ""))
-    best_ref = ref_from_file or ref_c or ref_g
-
+    best_ref = _pick_best_reference(platform=p, src_file=src_file, row=row, text=text)
     row["C_reference"] = best_ref
     row["G_invoice_no"] = best_ref
 
+    # compact no ws
     row["C_reference"] = _compact_no_ws(row.get("C_reference", ""))
     row["G_invoice_no"] = _compact_no_ws(row.get("G_invoice_no", ""))
 
@@ -866,7 +1183,35 @@ def finalize_row(
         src_file=src_file,
     )
 
-    # ✅ GL code fill (✅ FIX: now ctax resolves from cfg too)
+    # ✅ (A) Q_payment_method mapping (EWLxxx) — use wallet mapping
+    # - client tax id must be OUR company tax id (ctax)
+    # - seller_id: digits (Shopee seller/shop id)
+    # - shop_name: use username first (often store name), fallback src_file, or row fields
+    if not str(row.get("Q_payment_method") or "").strip():
+        shop_name = (
+            str(row.get("shop_name") or "").strip()
+            or str(row.get("seller_name") or "").strip()
+            or str(row.get("username") or "").strip()
+            or (username or "")
+            or (src_file or "")
+        )
+        try:
+            wallet = resolve_wallet_code(
+                ctax or client_tax_id,
+                seller_id=str(seller_id or ""),
+                shop_name=shop_name,
+                text=text,
+            )
+        except Exception:
+            wallet = ""
+
+        if wallet:
+            row["Q_payment_method"] = wallet
+        else:
+            # ไม่เดา → ปล่อยว่างให้ NEEDS_REVIEW ได้
+            row["Q_payment_method"] = str(row.get("Q_payment_method") or "").strip()
+
+    # ✅ GL code fill
     if not str(row.get("K_account") or "").strip():
         row["K_account"] = _resolve_gl_code(ctax, p, row, cfg)
 
@@ -877,10 +1222,8 @@ def finalize_row(
     if not str(row.get("O_vat_rate") or "").strip():
         row["O_vat_rate"] = "NO" if p in ("META", "GOOGLE") else "7%"
 
-    # ✅ APPLY PARAM: calculate_wht (✅/❌)  ✅ FIXED
-    # - ✅: คำนวณ P_wht จาก gross/(1+vat)*rate และ set R_paid_amount = gross - wht
-    # - ❌: ล้าง P_wht และ set S_pnd ตาม cfg
-    row = _apply_wht_policy(row, cfg)
+    # ✅ WHT policy (SMART: keep/extract/calc + net paid)
+    row = _apply_wht_policy(row, cfg, text=text)
 
     # lock schema
     row = lock_peak_columns(row)
@@ -925,14 +1268,19 @@ def extract_row(
     """
     ✅ ตัวจริง: แนะนำให้ส่วนอื่นในระบบใช้ชื่อ extract_row เป็นหลัก
     ✅ MUST PASS filename + cfg ลงไปถึง extractor ทุกตัว
-    ✅ FIX: resolve client_tax_id from cfg (client_tax_ids/list) before finalize/vendor-map
+    ✅ SMART FIXES:
+      - resolve client_tax_id from cfg
+      - reference selection: doc/text > filename (avoid hash)
+      - auto-detect WHT from doc text (optional) + net paid
+      - normalize payment method (EWLxxx) if wallet_mapping available
+      - deterministic debug metadata
     """
     text = text or ""
     filename = filename or ""
     client_tax_id = (client_tax_id or "").strip()
     cfg = cfg or {}
 
-    # ✅ FIX (A): resolve tax from cfg if empty / list
+    # ✅ resolve tax from cfg if empty / list
     resolved_tax = client_tax_id or _resolve_client_tax_id_from_cfg(cfg, filename=filename, text=text)
     if resolved_tax:
         client_tax_id = resolved_tax
@@ -1084,7 +1432,8 @@ def extract_row(
                 row["_missing_extractor"] = "spx"
 
         elif platform_route == "THAI_TAX":
-            if _AI_OK and extract_with_ai is not None:
+            # ถ้าอยากใช้ AI ช่วยเติม Thai Tax ให้เปิด ENABLE_AI_EXTRACT + ENABLE_LLM ใน env
+            if _AI_OK and extract_with_ai is not None and os.getenv("ENABLE_AI_THAI_TAX", "1") == "1":
                 row = _safe_call_extractor(
                     extract_with_ai,
                     text,
@@ -1129,16 +1478,23 @@ def extract_row(
     if row.get("M_qty") in ("", None):
         row["M_qty"] = "1"
 
-    # debug meta
+    # debug meta (helps deploy vs local)
     if os.getenv("STORE_CLASSIFIER_META", "1") == "1":
         row["_platform"] = platform_out
         row["_platform_route"] = platform_route
         row["_platform_raw"] = platform_raw
         row["_filename"] = filename
+
+        # also store important flags so you can compare deploy/local quickly
+        row["_env_ai_extract"] = os.getenv("ENABLE_AI_EXTRACT", "0")
+        row["_env_ai_repair"] = os.getenv("AI_REPAIR_PASS", "0")
+        row["_env_ai_fill_missing"] = os.getenv("AI_FILL_MISSING", "1")
+        row["_env_enable_llm"] = os.getenv("ENABLE_LLM", "")
+        row["_env_ocr_provider"] = os.getenv("OCR_PROVIDER", "")
         if cfg:
             row["_cfg"] = str(cfg)[:300]
 
-    # 3) optional AI enhancement for non-meta/google
+    # 3) optional AI enhancement for non-meta/google (ONLY when explicitly enabled)
     should_enhance = (
         platform_route not in ("META", "GOOGLE")
         and _AI_OK
@@ -1168,7 +1524,7 @@ def extract_row(
     # 4) validate
     errors = _validate_row(row)
 
-    # 5) optional AI repair pass if errors
+    # 5) optional AI repair pass if errors (ONLY when enabled)
     if (
         errors
         and platform_route not in ("META", "GOOGLE")
@@ -1193,13 +1549,16 @@ def extract_row(
             logger.warning("AI repair failed (file=%s): %s", filename, e)
             _record_ai_error(row, "ai_repair", e)
 
-    # ✅ FIX: refresh client_tax_id again (บาง extractor อาจตั้งค่าใน cfg/row)
+    # ✅ refresh client_tax_id again (บาง extractor อาจตั้งค่าใน cfg/row)
     client_tax_id = (client_tax_id or "").strip() or _resolve_client_tax_id_from_cfg(cfg, filename=filename, text=text)
 
-    # 6) vendor mapping pass (force Cxxxxx) (ใช้ client_tax_id ที่ resolve แล้ว)
+    # 6) vendor mapping pass (force Cxxxxx)
     row = _apply_vendor_code_mapping(row, text, client_tax_id)
 
-    # 7) ✅ FINALIZE + LOCK (MUST PASS cfg + filename)
+    # 7) payment method normalize (pre-finalize)
+    row = _apply_payment_method_mapping(row, text)
+
+    # 8) ✅ FINALIZE + LOCK (MUST PASS cfg + filename)
     row = finalize_row(
         row,
         platform=platform_out,
@@ -1238,4 +1597,6 @@ __all__ = [
     "PLATFORM_GROUPS",
     "PLATFORM_DESCRIPTIONS",
 ]
-logger.warning("EXTRACT_SERVICE_FINGERPRINT=v2026-01-21-1")
+
+# 🔒 fingerprint log (ช่วยเช็ค deploy ว่าใช้ไฟล์เวอร์ชันนี้จริง)
+logger.warning("EXTRACT_SERVICE_FINGERPRINT=v2026-01-22-smart-all-platforms-1")
