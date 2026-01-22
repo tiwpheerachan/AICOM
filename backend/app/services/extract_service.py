@@ -136,7 +136,6 @@ CLIENT_TAX_BY_TAG = {
 
 PEAK_KEYS_ORDER: List[str] = [
     "A_seq",
-    "A_company_name",
     "B_doc_date",
     "C_reference",
     "D_vendor_code",

@@ -362,7 +362,6 @@ def base_row_dict() -> Dict[str, Any]:
     """
     return {
         "A_seq": "1",
-        "A_company_name": "",      # ✅ MUST EXIST for XLSX
         "B_doc_date": "",
         "C_reference": "",
         "D_vendor_code": "",

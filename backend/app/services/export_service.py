@@ -78,7 +78,6 @@ PLATFORM_GROUPS = {
 # =========================
 COLUMNS: List[Tuple[str, str]] = [
     ("A_seq", "ลำดับที่*"),
-    ("A_company_name", "ชื่อบริษัท"),
     ("B_doc_date", "วันที่เอกสาร"),
     ("C_reference", "อ้างอิงถึง"),
     ("D_vendor_code", "ผู้รับเงิน/คู่ค้า"),
@@ -103,7 +102,6 @@ COLUMNS: List[Tuple[str, str]] = [
 
 TEXT_COL_KEYS: Set[str] = {
     "A_seq",
-    "A_company_name",
     "C_reference",
     "D_vendor_code",
     "E_tax_id_13",

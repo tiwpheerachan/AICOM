@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------
 
 PEAK_FIELDS = [
-    "A_seq", "A_company_name", "B_doc_date", "C_reference", "D_vendor_code",
+    "A_seq", "B_doc_date", "C_reference", "D_vendor_code",
     "E_tax_id_13", "F_branch_5", "G_invoice_no", "H_invoice_date",
     "I_tax_purchase_date", "J_price_type", "K_account", "L_description",
     "M_qty", "N_unit_price", "O_vat_rate", "P_wht", "Q_payment_method",

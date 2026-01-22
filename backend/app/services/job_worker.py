@@ -495,7 +495,6 @@ def _normalize_row_fields(row: Dict[str, Any], seq: int) -> None:
     row["G_invoice_no"] = _compact_ref(row.get("G_invoice_no"))
 
     for k in (
-        "A_company_name",
         "D_vendor_code",
         "K_account",
         "L_description",
@@ -704,7 +703,6 @@ def process_job_files(job_service, job_id: str) -> None:
 
                 row_min: Dict[str, Any] = {
                     "A_seq": seq,
-                    "A_company_name": company,
                     "_source_file": filename,
                     "_platform": platform_u,
                     "_client_tax_id": client_tax_id,
@@ -784,7 +782,6 @@ def process_job_files(job_service, job_id: str) -> None:
 
                 row: Dict[str, Any] = {
                     "A_seq": seq,
-                    "A_company_name": company,
                     "_source_file": filename,
                     "_platform": platform_u,
                     "_client_tax_id": client_tax_id,
@@ -912,7 +909,6 @@ def process_job_files(job_service, job_id: str) -> None:
 
             err_row: Dict[str, Any] = {
                 "A_seq": seq,
-                "A_company_name": company or "",
                 "_source_file": filename,
                 "_platform": platform_u or "UNKNOWN",
                 "_status": "ERROR",
