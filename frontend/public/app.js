@@ -72,7 +72,6 @@
   // =========================================================
   const COLUMNS = [
     ["A_seq","ลำดับที่*"],
-    ["A_company_name","ชื่อบริษัท"],
     ["B_doc_date","วันที่เอกสาร"],
     ["C_reference","อ้างอิงถึง"],
     ["D_vendor_code","ผู้รับเงิน/คู่ค้า"],
@@ -97,7 +96,7 @@
     ["_source_file","ไฟล์ต้นทาง"],
   ];
 
-  const NON_EDITABLE = new Set(["_status","_source_file","A_company_name"]);
+  const NON_EDITABLE = new Set(["_status","_source_file"]);
 
   // =========================================================
   // utils
@@ -229,7 +228,6 @@
   function enrichRowsForUI(){
     state.rows = (state.rows || []).map((r) => {
       const row = (r && typeof r === "object") ? r : {};
-      row.A_company_name = row.A_company_name || deriveCompanyNameFromRow(row);
       return row;
     });
   }
