@@ -41,24 +41,29 @@ RE_SPX_FULL_REFERENCE = re.compile(
 RE_SPX_REF_CODE_FLEX = re.compile(r"\b(\d{4})\s*-\s*(\d{7})\b")
 
 RE_TOTAL_INC_VAT = re.compile(
-    r"(?:รวม\s*ทั้ง\s*สิ้น|Total\s*(?:amount)?\s*\(?(?:including|incl\.?)\s*VAT\)?|Grand\s*Total|จำนวนเงินรวม)\s*[:#：]?\s*฿?\s*([0-9,]+(?:\.[0-9]{1,2})?)",
+    # ✅ รองรับเลย์เอาต์ SPX: "จำนวนเงินรวม/ Total amount  11,439.00"
+    # อนุญาตคำคั่น/ขีด/วงเล็บ/Total amount ระหว่าง keyword กับเลข สูงสุด 60 ตัว
+    r"(?:รวม\s*ทั้ง\s*สิ้น|Total\s*(?:amount)?\s*\(?(?:including|incl\.?)\s*VAT\)?|Grand\s*Total|จำนวนเงินรวม)"
+    r"[^\d฿\n]{0,60}฿?\s*([0-9,]+(?:\.[0-9]{1,2})?)",
     re.IGNORECASE,
 )
 RE_TOTAL_EX_VAT = re.compile(
-    r"(?:ก่อน\s*ภาษี|Subtotal\s*\(?(?:excluding|excl\.?)\s*VAT\)?|Total\s*excluding\s*VAT)\s*[:#：]?\s*฿?\s*([0-9,]+(?:\.[0-9]{1,2})?)",
+    r"(?:ก่อน\s*ภาษี|Subtotal\s*\(?(?:excluding|excl\.?)\s*VAT\)?|Total\s*excluding\s*VAT)"
+    r"[^\d฿\n]{0,60}฿?\s*([0-9,]+(?:\.[0-9]{1,2})?)",
     re.IGNORECASE,
 )
 RE_VAT_AMOUNT = re.compile(
-    r"(?:ภาษีมูลค่าเพิ่ม|VAT)\s*(?:7\s*%|7%|@?\s*7%)?\s*[:#：]?\s*฿?\s*([0-9,]+(?:\.[0-9]{1,2})?)",
+    r"(?:ภาษีมูลค่าเพิ่ม|VAT)\s*(?:7\s*%|7%|@?\s*7%)?[^\d฿\n]{0,30}฿?\s*([0-9,]+(?:\.[0-9]{1,2})?)",
     re.IGNORECASE,
 )
 
+# ✅ SPX WHT: "ในอัตราร้อยละ 1 เป็นจำนวนเงิน 114.39" — % เป็น optional (PDF SPX ไม่ใส่ %)
 RE_SPX_WHT_TH = re.compile(
-    r"หักภาษีเงินได้\s*ณ\s*ที่จ่าย.*?อัตรา(?:ร้อย)?ละ\s*(\d+)\s*%.*?(?:เป็นจำนวนเงิน|จำนวน)\s*([0-9,]+(?:\.[0-9]{1,2})?)",
+    r"หักภาษีเงินได้\s*ณ\s*ที่จ่าย.*?อัตรา(?:ร้อย)?ละ\s*(\d+)\s*%?.*?(?:เป็นจำนวนเงิน|จำนวน)\s*([0-9,]+(?:\.[0-9]{1,2})?)",
     re.IGNORECASE | re.DOTALL,
 )
 RE_SPX_WHT_EN = re.compile(
-    r"withholding\s+tax.*?(\d+)\s*%.*?(?:at|=)\s*([0-9,]+(?:\.[0-9]{1,2})?)\s*THB",
+    r"withholding\s+tax.*?(\d+)\s*%?.*?(?:at|=)\s*([0-9,]+(?:\.[0-9]{1,2})?)\s*THB",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -274,9 +279,13 @@ def extract_spx(text: str, client_tax_id: str = "", filename: str = "") -> Dict[
         row["O_vat_rate"] = "7%"
         row["Q_payment_method"] = "หักจากยอดขาย"
 
-        # ค่า WHT: ในระบบคุณตอนนี้ให้คงว่าง/ไม่บังคับ (post-process ไม่แตะ)
-        # ถ้าจะให้โชว์ 1%/3% ค่อยกำหนด policy เพิ่มภายหลัง
-        row["P_wht"] = ""
+        # ✅ WHT: SPX ใช้ "ร้อยละ 1" (ไม่มีเครื่องหมาย %) -> regex global detect ไม่เจอ
+        # ใส่ wht_amount ที่ extractor ตรวจเจอจาก PDF ตรงๆ ให้ _apply_wht_policy ใช้ต่อ
+        # (ถ้า user uncheck WHT -> _apply_wht_policy จะล้าง P_wht/S_pnd ทิ้งภายหลัง)
+        if has_wht and wht_amount:
+            row["P_wht"] = wht_amount
+        else:
+            row["P_wht"] = ""
         row["S_pnd"] = ""
 
         row["U_group"] = "Marketplace Expense"

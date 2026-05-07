@@ -66,6 +66,11 @@ def _normalize_punct(s: str) -> str:
     Normalize punctuation variants:
     - Convert dash variants to '-'
     - Convert fullwidth chars to normal via NFKC then back to NFC
+
+    ⚠️ CRITICAL: Python's unicodedata.normalize("NFKC", "ำ") decomposes Thai
+    SARA AM (U+0E33) into NIKHAHIT (U+0E4D) + SARA AA (U+0E32). This breaks
+    every Thai regex containing 'ำ' (จำนวน / สำนักงาน / จำกัด / บริษัท ฯลฯ).
+    We re-compose those two code points back to U+0E33 after NFKC.
     """
     try:
         # NFKC can normalize fullwidth letters/numbers/punct
@@ -73,6 +78,8 @@ def _normalize_punct(s: str) -> str:
     except Exception:
         s2 = s
     s2 = RE_DASHES.sub("-", s2)
+    # ✅ Re-compose Thai SARA AM (must run after NFKC, before regex extraction)
+    s2 = s2.replace("ํา", "ำ")
     return _nfc(s2)
 
 

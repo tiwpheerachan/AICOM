@@ -843,6 +843,11 @@ def process_job_files(job_service, job_id: str) -> None:
                             if k == "P_wht":
                                 continue
 
+                            # ✅ HARD LOCK: ถ้าผู้ใช้ปิด WHT -> AI ห้ามใส่ S_pnd
+                            # (S_pnd ที่มีค่า จะไปขึ้นในแบบยื่น ภ.ง.ด. ของ PEAK)
+                            if k == "S_pnd" and not bool(cfg.get("compute_wht", True)):
+                                continue
+
                             v_str = _safe_str(v)
                             if not v_str:
                                 continue
@@ -864,6 +869,12 @@ def process_job_files(job_service, job_id: str) -> None:
 
                 # ✅ re-lock again after AI
                 _apply_locked_fields(row, filename=filename, platform_u=platform_u, text=text, client_tax_id=client_tax_id)
+
+                # ✅ FINAL ENFORCEMENT: ถ้าผู้ใช้ปิด WHT -> บังคับล้าง P_wht / S_pnd ทุกกรณี
+                # (ป้องกัน extractor หรือ AI patch หลุด -> ภ.ง.ด. ติดในแบบยื่น)
+                if not bool(cfg.get("compute_wht", True)):
+                    row["P_wht"] = ""
+                    row["S_pnd"] = ""
 
                 errors2 = _revalidate(row)
                 row["_errors"] = _merge_unique_errors(list(row.get("_errors") or []), errors2)
