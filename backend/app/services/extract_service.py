@@ -877,7 +877,20 @@ def _apply_wht_policy(row: Dict[str, Any], cfg: Dict[str, Any], *, text: str = "
       - wht_override_existing: default False
     """
     cfg = cfg or {}
-    enabled_calc = _truthy(cfg.get("calculate_wht", cfg.get("wht_enabled")))
+
+    # ✅ Respect UI flag: ถ้าผู้ใช้ปิด "ภาษีหัก ณ ที่จ่าย" -> ห้ามเติมทั้ง P_wht และ S_pnd
+    # (S_pnd ถ้าใส่จะไปขึ้นในแบบยื่น ภ.ง.ด. ของ PEAK)
+    # R_paid_amount จะคงไว้เป็น gross รวม VAT (ไม่หัก WHT) -> ตรงตามที่ผู้ใช้ขอ
+    if "compute_wht" in cfg and not _truthy(cfg.get("compute_wht")):
+        row["P_wht"] = ""
+        row["S_pnd"] = ""
+        return row
+
+    # ✅ ON: ถ้าผู้ใช้ติ๊ก WHT explicit -> บังคับคำนวณ (ไม่รอ text detect อย่างเดียว)
+    # เพื่อให้ P_wht / S_pnd / R_paid_amount ออกตามตาราง logic ทุกครั้ง
+    force_compute_wht = "compute_wht" in cfg and _truthy(cfg.get("compute_wht"))
+
+    enabled_calc = force_compute_wht or _truthy(cfg.get("calculate_wht", cfg.get("wht_enabled")))
     auto_detect = _truthy(cfg.get("auto_detect_wht", "1"))
     try:
         rate_f = float(cfg.get("wht_rate", 0.03))
@@ -984,12 +997,14 @@ def _apply_wht_policy(row: Dict[str, Any], cfg: Dict[str, Any], *, text: str = "
     # -------------------------
     # 5) No WHT
     # -------------------------
-    # If WHT not enabled and none detected -> keep empty
+    # ✅ ไม่มี WHT -> P_wht ว่าง และ "ห้าม" บังคับ S_pnd=53
+    # (bug เก่า: pnd_when_no=53 default -> ขึ้น "53" ในแบบยื่น ภ.ง.ด. แม้ไม่มี WHT)
     if not enabled_calc and not cur_wht_s:
         row["P_wht"] = ""
 
+    # ไม่มี WHT -> S_pnd ต้องว่าง (ไม่ใช่ "53")
     if not str(row.get("S_pnd") or "").strip():
-        row["S_pnd"] = pnd_when_no
+        row["S_pnd"] = ""
 
     return row
 

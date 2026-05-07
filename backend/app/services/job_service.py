@@ -112,27 +112,35 @@ def _norm_platforms(ps: Any) -> List[str]:
 def _safe_cfg(cfg: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """
     ✅ Normalize cfg to stable shape + validate platforms
-    
+
     Expected keys:
       - client_tags: ["SHD","RABBIT","TOPONE",...]
       - client_tax_ids: ["0105...","..."]
       - platforms: ["META","SHOPEE",...] (✅ validated)
       - strictMode: bool (default False)
-    
+      - compute_wht: bool (preserved only when caller set it; default left absent)
+
     Empty list = allow all
     """
     cfg = cfg or {}
-    
+
     # Normalize platforms with validation
     platforms_raw = cfg.get("platforms")
     platforms_normalized = _norm_platforms(platforms_raw)
-    
-    return {
+
+    out: Dict[str, Any] = {
         "client_tags": _norm_list(cfg.get("client_tags")),
         "client_tax_ids": [str(x).strip() for x in (cfg.get("client_tax_ids") or []) if str(x).strip()],
         "platforms": platforms_normalized,  # ✅ Validated platforms only
         "strictMode": bool(cfg.get("strictMode", False)),
     }
+
+    # ✅ Preserve compute_wht (WHT toggle from UI). Don't drop it — downstream
+    # extractor depends on this flag to skip filling P_wht / S_pnd.
+    if "compute_wht" in cfg:
+        out["compute_wht"] = bool(cfg.get("compute_wht"))
+
+    return out
 
 
 # ============================================================
