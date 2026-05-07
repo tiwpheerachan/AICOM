@@ -991,21 +991,27 @@ def _apply_wht_policy(row: Dict[str, Any], cfg: Dict[str, Any], *, text: str = "
                 row["_wht_calc_base_ex_vat"] = _fmt_2(round(base_ex_vat + 1e-9, 2))
 
     # -------------------------
-    # 4) Apply net paid = gross - wht (IMPORTANT)
+    # 4) WHT detected -> ตั้ง P_wht / S_pnd แสดงเป็น info เท่านั้น
+    #    R_paid_amount ต้องคงไว้เป็น "ยอดข้างล่างของเอกสาร" (Total Incl VAT)
+    #    ไม่หัก WHT ออกจาก R เพราะผู้ใช้ขอให้ N = R = ยอดเต็มจาก PDF
     # -------------------------
     if cur_wht > 0:
-        if gross > 0:
-            if os.getenv("STORE_WHT_META", "1") == "1":
-                row["_gross_amount_before_wht"] = _fmt_2(round(gross + 1e-9, 2))
-
-            net = gross - cur_wht
-            if net < 0:
-                net = 0.0
-            row["R_paid_amount"] = _fmt_2(round(net + 1e-9, 2))
-
+        if gross > 0 and os.getenv("STORE_WHT_META", "1") == "1":
+            row["_gross_amount_before_wht"] = _fmt_2(round(gross + 1e-9, 2))
         # set PND when WHT exists
         if not str(row.get("S_pnd") or "").strip():
             row["S_pnd"] = pnd_when_wht
+        # ✅ Sync N = R = gross (ยอด Total Incl VAT)
+        n_val = _to_float(row.get("N_unit_price"))
+        r_val = _to_float(row.get("R_paid_amount"))
+        if n_val > 0 and r_val > 0 and abs(n_val - r_val) > 0.005:
+            best = max(n_val, r_val)
+            row["N_unit_price"] = _fmt_2(best)
+            row["R_paid_amount"] = _fmt_2(best)
+        elif r_val > 0 and n_val <= 0:
+            row["N_unit_price"] = row["R_paid_amount"]
+        elif n_val > 0 and r_val <= 0:
+            row["R_paid_amount"] = row["N_unit_price"]
         return row
 
     # -------------------------
