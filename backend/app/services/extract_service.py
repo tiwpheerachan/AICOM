@@ -884,6 +884,20 @@ def _apply_wht_policy(row: Dict[str, Any], cfg: Dict[str, Any], *, text: str = "
     if "compute_wht" in cfg and not _truthy(cfg.get("compute_wht")):
         row["P_wht"] = ""
         row["S_pnd"] = ""
+        # ✅ Sync N <-> R: WHT ปิด -> N (ราคาต่อหน่วย) ต้อง = R (จำนวนเงินที่ชำระ)
+        # บน Render บาง extractor ออก N != R (regex เก็บ line item แทน total)
+        # เลยบังคับ sync ที่นี่ให้ /rows endpoint ก็ได้ค่าตรง ไม่ต้องรอ export
+        n_val = _to_float(row.get("N_unit_price"))
+        r_val = _to_float(row.get("R_paid_amount"))
+        if n_val > 0 and r_val > 0 and abs(n_val - r_val) > 0.005:
+            # ใช้ค่าที่มากกว่า (มักเป็น total เต็ม ไม่ใช่ line item)
+            best = max(n_val, r_val)
+            row["N_unit_price"] = _fmt_2(best)
+            row["R_paid_amount"] = _fmt_2(best)
+        elif r_val > 0 and n_val <= 0:
+            row["N_unit_price"] = row["R_paid_amount"]
+        elif n_val > 0 and r_val <= 0:
+            row["R_paid_amount"] = row["N_unit_price"]
         return row
 
     # ✅ ON: ถ้าผู้ใช้ติ๊ก WHT explicit -> บังคับคำนวณ (ไม่รอ text detect อย่างเดียว)
