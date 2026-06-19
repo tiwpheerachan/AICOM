@@ -31,9 +31,10 @@ import re
 # ============================================================
 # Client Tax ID Constants
 # ============================================================
-CLIENT_RABBIT = "0105561071873"
-CLIENT_SHD    = "0105563022918"
-CLIENT_TOPONE = "0105565027615"
+CLIENT_RABBIT  = "0105561071873"
+CLIENT_SHD     = "0105563022918"
+CLIENT_TOPONE  = "0105565027615"
+CLIENT_HASHTAG = "0105568015456"   # HASHTAG SELECTION CO.,LTD.
 
 # ============================================================
 # Vendor Tax ID Constants (canonical)
@@ -311,7 +312,7 @@ def _norm_tax_id(tax_id: str) -> str:
 
 def _is_known_client(client_tax_id: str) -> bool:
     c = _norm_tax_id(client_tax_id)
-    return c in (CLIENT_RABBIT, CLIENT_SHD, CLIENT_TOPONE)
+    return c in (CLIENT_RABBIT, CLIENT_SHD, CLIENT_TOPONE, CLIENT_HASHTAG)
 
 
 def _code_is_valid(code: str) -> bool:
@@ -580,6 +581,8 @@ def detect_client_from_context(text: str) -> Optional[str]:
         return CLIENT_SHD
     if CLIENT_TOPONE in t:
         return CLIENT_TOPONE
+    if CLIENT_HASHTAG in t:
+        return CLIENT_HASHTAG
 
     # keyword fallback
     if "rabbit" in t:
@@ -588,6 +591,8 @@ def detect_client_from_context(text: str) -> Optional[str]:
         return CLIENT_SHD
     if "topone" in t or "top one" in t:
         return CLIENT_TOPONE
+    if "hashtag" in t or "hash tag" in t:
+        return CLIENT_HASHTAG
 
     return None
 
@@ -600,6 +605,8 @@ def get_client_name(client_tax_id: str) -> str:
         return "SHD"
     if c == CLIENT_TOPONE:
         return "TOPONE"
+    if c == CLIENT_HASHTAG:
+        return "HASHTAG"
     return "UNKNOWN"
 
 
@@ -671,6 +678,7 @@ __all__ = [
     "CLIENT_RABBIT",
     "CLIENT_SHD",
     "CLIENT_TOPONE",
+    "CLIENT_HASHTAG",
     "VENDOR_SHOPEE",
     "VENDOR_LAZADA",
     "VENDOR_TIKTOK",

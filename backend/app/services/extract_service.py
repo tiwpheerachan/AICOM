@@ -115,11 +115,13 @@ PLATFORM_DESCRIPTIONS = {
 CLIENT_RABBIT = "0105561071873"
 CLIENT_SHD = "0105563022918"
 CLIENT_TOPONE = "0105565027615"
+CLIENT_HASHTAG = "0105568015456"   # HASHTAG SELECTION CO.,LTD.
 
 DEFAULT_COMPANY_NAME_BY_TAX = {
     CLIENT_RABBIT: "RABBIT",
     CLIENT_SHD: "SHD",
     CLIENT_TOPONE: "TOPONE",
+    CLIENT_HASHTAG: "HASHTAG",
 }
 
 # tag -> tax id (ใช้ตอน cfg มีหลายบริษัท)
@@ -127,7 +129,7 @@ CLIENT_TAX_BY_TAG = {
     "RABBIT": CLIENT_RABBIT,
     "SHD": CLIENT_SHD,
     "TOPONE": CLIENT_TOPONE,
-    # HASHTAG: ไม่ทราบเลขภาษี -> ปล่อยว่าง
+    "HASHTAG": CLIENT_HASHTAG,
 }
 
 # ============================================================

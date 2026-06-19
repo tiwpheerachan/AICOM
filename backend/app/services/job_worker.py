@@ -51,6 +51,7 @@ CLIENT_TAX_IDS: Dict[str, str] = {
     "RABBIT": "0105561071873",
     "SHD": "0105563022918",
     "TOPONE": "0105565027615",
+    "HASHTAG": "0105568015456",  # HASHTAG SELECTION CO.,LTD.
 }
 TAXID_TO_COMPANY: Dict[str, str] = {v: k for k, v in CLIENT_TAX_IDS.items()}
 
@@ -186,7 +187,7 @@ def _company_from_tax_id(client_tax_id: str, filename: str = "") -> str:
         return TAXID_TO_COMPANY[client_tax_id]
 
     fn = (filename or "").upper()
-    for k in ("RABBIT", "SHD", "TOPONE"):
+    for k in ("RABBIT", "SHD", "TOPONE", "HASHTAG"):
         if k in fn:
             return k
     return ""
