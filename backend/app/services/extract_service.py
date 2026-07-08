@@ -49,6 +49,20 @@ except Exception:  # pragma: no cover
     detect_client_from_context = None  # type: ignore
     _VENDOR_MAPPING_OK = False
 
+# ✅ platform-based vendor code resolver (matrix: platform × company -> Cxxxxx)
+try:
+    from ..extractors.vendor_mapping import (
+        get_vendor_code_by_platform,
+        resolve_company_tag,
+        detect_company_tag_from_text,
+    )
+    _VENDOR_MATRIX_OK = True
+except Exception:  # pragma: no cover
+    get_vendor_code_by_platform = None  # type: ignore
+    resolve_company_tag = None  # type: ignore
+    detect_company_tag_from_text = None  # type: ignore
+    _VENDOR_MATRIX_OK = False
+
 # ✅ Wallet / Payment mapping (EWLxxx) (optional)
 try:
     from ..extractors.wallet_mapping import resolve_wallet_code  # type: ignore
@@ -631,12 +645,51 @@ def _safe_call_extractor(
 # Vendor mapping: force D_vendor_code = Cxxxxx
 # ============================================================
 
-def _apply_vendor_code_mapping(row: Dict[str, Any], text: str, client_tax_id: str) -> Dict[str, Any]:
+def _single_client_tag_from_cfg(cfg: Optional[Dict[str, Any]]) -> str:
+    """
+    ถ้าผู้ใช้เลือกบริษัทเดียวใน UI -> คืน tag นั้น (SHD/RABBIT/TOPONE/HASHTAG)
+    ใช้เพื่อแมป Hashtag ที่ไม่มีเลขภาษี
+    """
+    if not isinstance(cfg, dict):
+        return ""
+    tags = [str(t).strip().upper() for t in _as_list(cfg.get("client_tags")) if str(t).strip()]
+    tags = [t for t in tags if t in ("SHD", "RABBIT", "TOPONE", "HASHTAG")]
+    return tags[0] if len(tags) == 1 else ""
+
+
+def _looks_like_platform_name(v: str) -> bool:
+    s = (v or "").strip().lower()
+    if not s:
+        return False
+    return s in {
+        "shopee", "lazada", "tiktok", "spx", "meta", "google",
+        "shopee express", "lazada express", "tiktok shop",
+        "thai happy logistics", "marketplace", "unknown",
+    }
+
+
+def _apply_vendor_code_mapping(
+    row: Dict[str, Any],
+    text: str,
+    client_tax_id: str,
+    *,
+    platform: str = "",
+    cfg: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    ✅ เซ็ตเฉพาะ D_vendor_code (ผู้รับเงิน/คู่ค้า) เท่านั้น ไม่ยุ่งช่องอื่น
+    ลำดับการหา:
+      1) matrix (platform × company) -> Cxxxxx   [รองรับ Hashtag ผ่าน client_tag]
+      2) get_vendor_code เดิม (client_tax_id + vendor_tax_id/name)
+      3) ถ้าแมปไม่ได้ และค่าเดิมเป็น "ชื่อแพลตฟอร์ม" -> เขียนเป็น "Unknown"
+    """
     if not isinstance(row, dict):
         return row
-    if not _VENDOR_MAPPING_OK or get_vendor_code is None:
-        return row
 
+    cfg = cfg or {}
+    platform = (platform or str(row.get("_platform") or row.get("_platform_route") or "")).strip()
+
+    # resolve client tax id (from arg -> detect from text)
     ctax = (client_tax_id or "").strip()
     if not ctax and detect_client_from_context is not None:
         try:
@@ -644,23 +697,51 @@ def _apply_vendor_code_mapping(row: Dict[str, Any], text: str, client_tax_id: st
         except Exception:
             ctax = ""
 
-    if not ctax:
-        return row
+    # resolve company tag ตามลำดับความน่าเชื่อถือ:
+    #   1) เลขภาษีผู้ซื้อในเอกสาร (รองรับ Hashtag ด้วย) — เดาได้เองแม้ "ไม่เลือกบริษัท"
+    #   2) บริษัทเดียวที่เลือกใน UI
+    ctag = ""
+    if _VENDOR_MATRIX_OK and detect_company_tag_from_text is not None:
+        try:
+            ctag = detect_company_tag_from_text(text) or ""
+        except Exception:
+            ctag = ""
+    if not ctag:
+        ctag = _single_client_tag_from_cfg(cfg)
 
     vtax = str(row.get("E_tax_id_13") or "").strip()
-    vname = str(row.get("D_vendor_code") or "").strip()
 
-    try:
-        code = get_vendor_code(client_tax_id=ctax, vendor_tax_id=vtax, vendor_name=vname)
-    except Exception:
-        return row
+    code = ""
 
+    # 1) matrix by platform × company
+    if _VENDOR_MATRIX_OK and get_vendor_code_by_platform is not None and platform and (ctax or ctag):
+        try:
+            code = get_vendor_code_by_platform(platform, client_tax_id=ctax, client_tag=ctag) or ""
+        except Exception:
+            code = ""
+
+    # 2) legacy: client_tax_id + vendor_tax_id/name
+    if not code and _VENDOR_MAPPING_OK and get_vendor_code is not None and ctax:
+        vname = str(row.get("D_vendor_code") or "").strip()
+        try:
+            legacy = get_vendor_code(client_tax_id=ctax, vendor_tax_id=vtax, vendor_name=vname)
+        except Exception:
+            legacy = ""
+        if isinstance(legacy, str) and legacy.startswith("C") and len(legacy) >= 5:
+            code = legacy
+
+    # 3) apply
     if isinstance(code, str) and code.startswith("C") and len(code) >= 5:
         row["D_vendor_code"] = code
         if os.getenv("STORE_VENDOR_MAPPING_META", "1") == "1":
             row["_client_tax_id_used"] = ctax
+            row["_client_tag_used"] = ctag
             row["_vendor_tax_id_used"] = vtax or ""
             row["_vendor_code_resolved"] = code
+    else:
+        # ❌ ห้ามปล่อยให้ D_vendor_code เป็นชื่อแพลตฟอร์ม (เช่น "Shopee"/"Lazada")
+        if _looks_like_platform_name(str(row.get("D_vendor_code") or "")):
+            row["D_vendor_code"] = "Unknown"
 
     return row
 
@@ -1602,8 +1683,8 @@ def extract_row(
     # ✅ refresh client_tax_id again (บาง extractor อาจตั้งค่าใน cfg/row)
     client_tax_id = (client_tax_id or "").strip() or _resolve_client_tax_id_from_cfg(cfg, filename=filename, text=text)
 
-    # 6) vendor mapping pass (force Cxxxxx)
-    row = _apply_vendor_code_mapping(row, text, client_tax_id)
+    # 6) vendor mapping pass (force Cxxxxx) — sets ONLY D_vendor_code
+    row = _apply_vendor_code_mapping(row, text, client_tax_id, platform=platform_out, cfg=cfg)
 
     # 7) payment method normalize (pre-finalize)
     row = _apply_payment_method_mapping(row, text)
