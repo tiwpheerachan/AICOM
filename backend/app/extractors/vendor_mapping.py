@@ -77,6 +77,117 @@ VENDOR_CODE_BY_CLIENT: Dict[str, Dict[str, str]] = {
 }
 
 # ============================================================
+# ✅ Company TAG <-> Tax ID (HASHTAG มีเฉพาะ tag ไม่มีเลขภาษี)
+# ============================================================
+TAG_SHD     = "SHD"
+TAG_RABBIT  = "RABBIT"
+TAG_TOPONE  = "TOPONE"
+TAG_HASHTAG = "HASHTAG"
+
+# ✅ Hashtag มีเลขภาษี (บริษัท แฮชแท็ก ซีเล็คชั่น จำกัด) — จากเอกสารจริง
+CLIENT_HASHTAG = "0105568015456"
+
+TAG_BY_CLIENT_TAX_ID: Dict[str, str] = {
+    CLIENT_SHD:     TAG_SHD,
+    CLIENT_RABBIT:  TAG_RABBIT,
+    CLIENT_TOPONE:  TAG_TOPONE,
+    CLIENT_HASHTAG: TAG_HASHTAG,
+}
+
+
+def detect_company_tag_from_text(text: str) -> str:
+    """
+    ✅ ใช้เฉพาะ path ของ D_vendor_code เท่านั้น
+    หา "บริษัทเรา" (ผู้ซื้อ) จากเลขภาษี 13 หลักในเอกสาร -> company tag
+    ไม่ยุ่งกับ K_account / ชื่อบริษัท (ไม่แตะ detect_client_from_context เดิม)
+    """
+    t = _thai_digits_to_arabic(text or "")
+    if not t:
+        return ""
+    for tax, tag in TAG_BY_CLIENT_TAX_ID.items():
+        if tax and tax in t:
+            return tag
+    return ""
+
+# ============================================================
+# ✅ Vendor Code Matrix (Source of Truth) — ตามตารางบริษัท
+# platform_key -> company_tag -> vendor_code (Cxxxxx)
+#
+# แพลตฟอร์มที่รองรับ:
+#   SHOPEE, SPX, LAZADA, LAZADA_EXPRESS, TIKTOK, THAI_HAPPY_LOGISTICS
+# บริษัท: SHD, RABBIT, TOPONE, HASHTAG
+# ============================================================
+VENDOR_CODE_MATRIX: Dict[str, Dict[str, str]] = {
+    "SHOPEE":               {TAG_SHD: "C00888", TAG_RABBIT: "C00395", TAG_TOPONE: "C00020", TAG_HASHTAG: "C00013"},
+    "SPX":                  {TAG_SHD: "C01133", TAG_RABBIT: "C00563", TAG_TOPONE: "C00038", TAG_HASHTAG: "C00016"},
+    "LAZADA":               {TAG_SHD: "C01132", TAG_RABBIT: "C00562", TAG_TOPONE: "C00025", TAG_HASHTAG: "C00014"},
+    "LAZADA_EXPRESS":       {TAG_SHD: "C34004", TAG_RABBIT: "C01266", TAG_TOPONE: "C00300", TAG_HASHTAG: "C00021"},
+    "TIKTOK":               {TAG_SHD: "C01246", TAG_RABBIT: "C00411", TAG_TOPONE: "C00051", TAG_HASHTAG: "C00015"},
+    "THAI_HAPPY_LOGISTICS": {TAG_SHD: "C34005", TAG_RABBIT: "C01265", TAG_TOPONE: "C00301", TAG_HASHTAG: "C00022"},
+}
+
+# platform label (จาก classifier/extractor) -> matrix key
+_PLATFORM_KEY_ALIASES: Dict[str, str] = {
+    "SHOPEE": "SHOPEE",
+    "SHOPEE MALL": "SHOPEE",
+    "SPX": "SPX",
+    "SPX EXPRESS": "SPX",
+    "SHOPEE EXPRESS": "SPX",
+    "LAZADA EXPRESS": "LAZADA_EXPRESS",
+    "LAZADA_EXPRESS": "LAZADA_EXPRESS",
+    "LEX": "LAZADA_EXPRESS",
+    "LAZADA": "LAZADA",
+    "TIKTOK SHOP": "TIKTOK",
+    "TIKTOK": "TIKTOK",
+    "THAI HAPPY LOGISTICS": "THAI_HAPPY_LOGISTICS",
+    "THAI_HAPPY_LOGISTICS": "THAI_HAPPY_LOGISTICS",
+    "THAI HAPPY": "THAI_HAPPY_LOGISTICS",
+}
+
+
+def _norm_platform_key(platform: str) -> str:
+    p = _norm_name(platform).upper().strip()
+    if not p:
+        return ""
+    if p in _PLATFORM_KEY_ALIASES:
+        return _PLATFORM_KEY_ALIASES[p]
+    # contains-match (longest first) กัน label ที่มีข้อความปน
+    for key in sorted(_PLATFORM_KEY_ALIASES.keys(), key=len, reverse=True):
+        if key in p:
+            return _PLATFORM_KEY_ALIASES[key]
+    return ""
+
+
+def resolve_company_tag(*, client_tax_id: str = "", client_tag: str = "") -> str:
+    """
+    คืน company tag (SHD/RABBIT/TOPONE/HASHTAG) จากเลขภาษีหรือ tag ที่ส่งมา
+    """
+    ctax = _norm_tax_id(client_tax_id)
+    if ctax in TAG_BY_CLIENT_TAX_ID:
+        return TAG_BY_CLIENT_TAX_ID[ctax]
+
+    t = (client_tag or "").strip().upper()
+    if t in (TAG_SHD, TAG_RABBIT, TAG_TOPONE, TAG_HASHTAG):
+        return t
+    return ""
+
+
+def get_vendor_code_by_platform(platform: str, *, client_tax_id: str = "", client_tag: str = "") -> str:
+    """
+    ✅ Primary resolver: (platform × company) -> Cxxxxx ตามตาราง
+    คืน "" ถ้าแมปไม่ได้ (caller ตัดสินใจ fallback / NEEDS_REVIEW)
+    """
+    tag = resolve_company_tag(client_tax_id=client_tax_id, client_tag=client_tag)
+    if not tag:
+        return ""
+    pkey = _norm_platform_key(platform)
+    if not pkey:
+        return ""
+    code = VENDOR_CODE_MATRIX.get(pkey, {}).get(tag, "")
+    return code if _code_is_valid(code) else ""
+
+
+# ============================================================
 # Vendor Name -> Vendor Tax ID mapping (fallback by name)
 # ============================================================
 VENDOR_NAME_TO_TAX: Dict[str, str] = {
@@ -660,6 +771,10 @@ def format_short_description(platform: str, fee_type: str = "", seller_info: str
 
 __all__ = [
     "get_vendor_code",
+    "get_vendor_code_by_platform",
+    "resolve_company_tag",
+    "detect_company_tag_from_text",
+    "VENDOR_CODE_MATRIX",
     "get_vendor_tax_id_from_name",
     "detect_client_from_context",
     "get_client_name",
