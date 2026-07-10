@@ -51,6 +51,7 @@ CLIENT_TAX_IDS: Dict[str, str] = {
     "RABBIT": "0105561071873",
     "SHD": "0105563022918",
     "TOPONE": "0105565027615",
+    "HASHTAG": "0105568015456",
 }
 TAXID_TO_COMPANY: Dict[str, str] = {v: k for k, v in CLIENT_TAX_IDS.items()}
 
@@ -186,7 +187,7 @@ def _company_from_tax_id(client_tax_id: str, filename: str = "") -> str:
         return TAXID_TO_COMPANY[client_tax_id]
 
     fn = (filename or "").upper()
-    for k in ("RABBIT", "SHD", "TOPONE"):
+    for k in ("RABBIT", "SHD", "TOPONE", "HASHTAG"):
         if k in fn:
             return k
     return ""
@@ -770,6 +771,7 @@ def process_job_files(job_service, job_id: str) -> None:
                                 seller_id=seller_id,
                                 shop_name=shop_name_hint,
                                 text=text,
+                                platform=platform_u,
                             )
                             or ""
                         )
@@ -869,6 +871,20 @@ def process_job_files(job_service, job_id: str) -> None:
 
                 # ✅ re-lock again after AI
                 _apply_locked_fields(row, filename=filename, platform_u=platform_u, text=text, client_tax_id=client_tax_id)
+
+                # ✅ HARD RULE: ช่อง "ชำระโดย" (Q) ห้ามเป็น "หักจากยอดขาย" เด็ดขาด
+                #    ต้องเป็นรหัส EWL ตามตาราง — ถ้าแมปไม่ได้ให้ว่าง + flag review (ไม่คงคำนี้ไว้)
+                #    (ไม่แตะ META/GOOGLE ที่เป็น CARD เพราะจับเฉพาะคำว่า "หักจากยอดขาย")
+                if str(row.get("Q_payment_method") or "").strip() == "หักจากยอดขาย":
+                    if wallet_code:
+                        row["Q_payment_method"] = wallet_code
+                    else:
+                        row["Q_payment_method"] = ""
+                        _add_note(row, "ชำระโดย: แมป EWL wallet ไม่ได้ (โปรดตรวจ/เพิ่มรหัสร้าน)")
+                        row["_errors"] = _merge_unique_errors(
+                            list(row.get("_errors") or []),
+                            ["ชำระโดย (Q) แมป EWL ไม่ได้ — ห้ามเป็น 'หักจากยอดขาย'"],
+                        )
 
                 # ✅ FINAL ENFORCEMENT: ถ้าผู้ใช้ปิด WHT -> บังคับล้าง P_wht / S_pnd ทุกกรณี
                 # (ป้องกัน extractor หรือ AI patch หลุด -> ภ.ง.ด. ติดในแบบยื่น)

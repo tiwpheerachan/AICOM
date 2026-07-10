@@ -52,8 +52,8 @@ VENDOR_SPX                = "0105561164871"   # SPX Express (Thailand)
 VENDOR_CODE_BY_CLIENT: Dict[str, Dict[str, str]] = {
     CLIENT_RABBIT: {
         VENDOR_SHOPEE: "C00395",
-        VENDOR_LAZADA: "C00411",
-        VENDOR_TIKTOK: "C00562",
+        VENDOR_LAZADA: "C00562",
+        VENDOR_TIKTOK: "C00411",
         VENDOR_MARKETPLACE_OTHER: "C01031",
         VENDOR_SHOPIFY: "C01143",
         VENDOR_SPX: "C00563",
