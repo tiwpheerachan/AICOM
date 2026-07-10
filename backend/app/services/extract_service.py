@@ -1332,6 +1332,7 @@ def finalize_row(
                 seller_id=str(seller_id or ""),
                 shop_name=shop_name,
                 text=text,
+                platform=p,
             )
         except Exception:
             wallet = ""
