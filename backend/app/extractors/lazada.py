@@ -95,6 +95,15 @@ RE_LAZADA_INVOICE_NO_FIELD = re.compile(
 )
 RE_LAZADA_DOC_THMPTI = re.compile(r"\b(THMPTI\d{16,})\b", re.IGNORECASE)
 
+# Lazada Express (Shipping Fee Receipt) — ผู้ขายคนละนิติบุคคลกับ Lazada
+VENDOR_LAZADA_EXPRESS = "0105558080778"
+RE_LAZADA_DOC_THLPTR = re.compile(r"\b(THLPTR\d{16,})\b", re.IGNORECASE)
+RE_LAZADA_EXPRESS_NAME = re.compile(r"Lazada\s*Express|ลาซาด้า\s*เอ็กซ์เพรส", re.IGNORECASE)
+RE_LAZADA_NET_TOTAL_SHIPPING = re.compile(
+    r"Net\s*Total(?:\s*Shipping\s*Fee)?\s*[:#：]?\s*([0-9,]+\.[0-9]{2})",
+    re.IGNORECASE
+)
+
 # date
 RE_LAZADA_INVOICE_DATE = re.compile(
     r"(?:Invoice\s*Date|Document\s*Date|Issue\s*Date)\s*[:#：]?\s*(\d{4}[-/\.]\d{1,2}[-/\.]\d{1,2})",
@@ -174,7 +183,7 @@ def _pick_client_tax_id(text: str) -> str:
     t = normalize_text(text or "")
     for m in RE_TAX_ID_13.finditer(t):
         tax = m.group(1)
-        if tax and tax != VENDOR_LAZADA:
+        if tax and tax not in (VENDOR_LAZADA, VENDOR_LAZADA_EXPRESS):
             return tax
     return ""
 
@@ -275,10 +284,11 @@ def _build_reference_no_space(text: str, filename: str = "") -> str:
     t = normalize_text(text or "")
     fn = normalize_text(filename or "")
 
-    # 1) THMPTI token anywhere (squashed)
-    m = RE_LAZADA_DOC_THMPTI.search(_squash_ws(t))
-    if m:
-        return _squash_ws(m.group(1))
+    # 1) THMPTI / THLPTR token anywhere (squashed)
+    for rx in (RE_LAZADA_DOC_THMPTI, RE_LAZADA_DOC_THLPTR):
+        m = rx.search(_squash_ws(t))
+        if m:
+            return _squash_ws(m.group(1))
 
     # 2) Invoice No field
     m = RE_LAZADA_INVOICE_NO_FIELD.search(t)
@@ -286,9 +296,10 @@ def _build_reference_no_space(text: str, filename: str = "") -> str:
         return _squash_ws(m.group(1).strip())
 
     # 3) filename fallback
-    m = RE_LAZADA_DOC_THMPTI.search(_squash_ws(fn))
-    if m:
-        return _squash_ws(m.group(1))
+    for rx in (RE_LAZADA_DOC_THMPTI, RE_LAZADA_DOC_THLPTR):
+        m = rx.search(_squash_ws(fn))
+        if m:
+            return _squash_ws(m.group(1))
 
     m = RE_LAZADA_INVOICE_NO_FIELD.search(fn)
     if m:
@@ -300,6 +311,15 @@ def _build_reference_no_space(text: str, filename: str = "") -> str:
         return _squash_ws(inv)
 
     return ""
+
+def _is_lazada_express(text: str, filename: str = "") -> bool:
+    """Shipping Fee Receipt ของ Lazada Express (THLPTR...) ไม่ใช่ใบกำกับภาษีของ Lazada"""
+    t = _squash_ws(text or "")
+    fn = _squash_ws(filename or "")
+    if RE_LAZADA_DOC_THLPTR.search(t) or RE_LAZADA_DOC_THLPTR.search(fn):
+        return True
+    return VENDOR_LAZADA_EXPRESS in t or bool(RE_LAZADA_EXPRESS_NAME.search(text or ""))
+
 
 def _enforce_ref_from_filename(row: Dict[str, Any], filename: str) -> None:
     """
@@ -343,11 +363,17 @@ def extract_lazada(text: str, client_tax_id: str = "", filename: str = "") -> Di
     try:
         t = normalize_text(text or "")
         row = base_row_dict()
+        is_lex = _is_lazada_express(t, filename)
 
         # --------------------------
         # STEP 1: Vendor tax & code
         # --------------------------
-        vendor_tax = find_vendor_tax_id(t, "Lazada") or VENDOR_LAZADA
+        if is_lex:
+            vendor_tax = VENDOR_LAZADA_EXPRESS
+            # extract_service ใช้ค่านี้เลือกแถว LAZADA_EXPRESS ในตาราง vendor code
+            row["_vendor_platform"] = "LAZADA_EXPRESS"
+        else:
+            vendor_tax = find_vendor_tax_id(t, "Lazada") or VENDOR_LAZADA
         row["E_tax_id_13"] = vendor_tax
 
         # best-effort client tax id
@@ -385,6 +411,13 @@ def extract_lazada(text: str, client_tax_id: str = "", filename: str = "") -> Di
         # --------------------------
         total_ex_vat, vat_amount, total_inc_vat = extract_totals_block(t)
 
+        # Lazada Express: ใบเสร็จค่าขนส่งไม่มี VAT ยอดอยู่ที่ "Net Total Shipping Fee"
+        if is_lex:
+            m = RE_LAZADA_NET_TOTAL_SHIPPING.search(t)
+            if m:
+                total_inc_vat = _safe_money(m.group(1))
+            total_ex_vat, vat_amount = total_inc_vat, ""
+
         # derive inc vat if missing (ex + vat exists)
         if not total_inc_vat:
             derived = _derive_total_inc_vat(total_ex_vat, vat_amount)
@@ -414,7 +447,7 @@ def extract_lazada(text: str, client_tax_id: str = "", filename: str = "") -> Di
         # --------------------------
         row["M_qty"] = "1"
         row["J_price_type"] = "1"
-        row["O_vat_rate"] = "7%"
+        row["O_vat_rate"] = "NO" if is_lex else "7%"
         row["Q_payment_method"] = "หักจากยอดขาย"
 
         if total_inc_vat:
