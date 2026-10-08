@@ -47,6 +47,8 @@ RE_SPX_RCS_ANY = re.compile(r"\bRCS\s*[A-Z0-9]{3,}\b", re.IGNORECASE)
 
 # Lazada
 RE_LAZADA_THMPTI = re.compile(r"\bTHMPTI\s*\d{10,20}\b", re.IGNORECASE)
+# Lazada Express (Shipping Fee Receipt) — เช่น THLPTR2026090000118239
+RE_LAZADA_THLPTR = re.compile(r"\bTHLPTR\s*\d{10,20}\b", re.IGNORECASE)
 
 # TikTok
 RE_TIKTOK_TTSTH = re.compile(r"\bTTSTH[0-9A-Z\-/]*\b", re.IGNORECASE)
@@ -334,6 +336,8 @@ def _weighted_score(t: str, filename: str) -> Dict[str, int]:
     # LAZADA
     if _regex_hit(tt, RE_LAZADA_THMPTI) or _regex_hit(fn, RE_LAZADA_THMPTI):
         score["LAZADA"] += 120
+    if _regex_hit(tt, RE_LAZADA_THLPTR) or _regex_hit(fn, RE_LAZADA_THLPTR):
+        score["LAZADA"] += 120
     score["LAZADA"] += 10 * _count_contains(tt, LAZADA_SIGS)
 
     # TIKTOK
@@ -414,7 +418,10 @@ def classify_platform(text: str, filename: str = "", debug: bool = False) -> Pla
         ):
             return "SPX"
 
-        if _regex_hit(t, RE_LAZADA_THMPTI) or _regex_hit(fn, RE_LAZADA_THMPTI):
+        if (
+            _regex_hit(t, RE_LAZADA_THMPTI) or _regex_hit(fn, RE_LAZADA_THMPTI) or
+            _regex_hit(t, RE_LAZADA_THLPTR) or _regex_hit(fn, RE_LAZADA_THLPTR)
+        ):
             return "LAZADA"
 
         if _regex_hit(t, RE_TIKTOK_TTSTH) or _regex_hit(fn, RE_TIKTOK_TTSTH):

@@ -687,7 +687,12 @@ def _apply_vendor_code_mapping(
         return row
 
     cfg = cfg or {}
-    platform = (platform or str(row.get("_platform") or row.get("_platform_route") or "")).strip()
+    # extractor ระบุผู้ขายย่อยได้ (เช่น Lazada Express ภายใต้ route LAZADA)
+    platform = (
+        str(row.get("_vendor_platform") or "")
+        or platform
+        or str(row.get("_platform") or row.get("_platform_route") or "")
+    ).strip()
 
     # resolve client tax id (from arg -> detect from text)
     ctax = (client_tax_id or "").strip()
@@ -898,8 +903,9 @@ def _truthy(v: Any) -> bool:
 
 
 # parse WHT from document text (Thai + EN)
+# PDF บางไฟล์มีช่องว่างแทรกก่อนสระ เช่น "หักภาษ ีณ ที่จ่าย"
 RE_WHT_TH = re.compile(
-    r"(?:หักภาษี\s*ณ\s*ที่จ่าย|ภาษีหัก\s*ณ\s*ที่จ่าย)[^\d%]{0,40}(\d{1,2}(?:\.\d+)?)\s*%[^\d]{0,40}([\d,]+\.\d{2}|\d+)",
+    r"(?:หักภาษ\s*ี\s*ณ\s*ที่จ่าย|ภาษ\s*ีหัก\s*ณ\s*ที่จ่าย)[^\d%]{0,40}(\d{1,2}(?:\.\d+)?)\s*%[^\d]{0,40}([\d,]+\.\d{2}|\d+)",
     re.IGNORECASE,
 )
 RE_WHT_EN = re.compile(
