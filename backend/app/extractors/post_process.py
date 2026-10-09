@@ -113,6 +113,7 @@ _RE_REF_TRS    = re.compile(r"(TRS[A-Z0-9]+-\d{5}-\d{6}-\d{7,})", re.IGNORECASE)
 _RE_REF_RCS    = re.compile(r"(RCS[A-Z0-9]+-\d{5}-\d{6}-\d{7,})", re.IGNORECASE)
 _RE_REF_TTSTH  = re.compile(r"(TTSTH\d{10,})", re.IGNORECASE)
 _RE_REF_THMPTI = re.compile(r"(THMPTI\d{16,})", re.IGNORECASE)
+_RE_REF_SHIPPING = re.compile(r"(THLPTR\d{10,}|THJV\d{10,})", re.IGNORECASE)
 
 _RE_ALL_WS = re.compile(r"\s+")
 
@@ -128,7 +129,7 @@ def extract_reference_from_filename(filename: str) -> str:
     stem, _ext = os.path.splitext(base)
 
     # พยายามจับ pattern หลักก่อน
-    for rx in (_RE_REF_TRS, _RE_REF_RCS, _RE_REF_TTSTH, _RE_REF_THMPTI):
+    for rx in (_RE_REF_TRS, _RE_REF_RCS, _RE_REF_TTSTH, _RE_REF_THMPTI, _RE_REF_SHIPPING):
         m = rx.search(stem)
         if m:
             return _RE_ALL_WS.sub("", m.group(1))

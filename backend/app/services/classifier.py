@@ -52,6 +52,8 @@ RE_LAZADA_THLPTR = re.compile(r"\bTHLPTR\s*\d{10,20}\b", re.IGNORECASE)
 
 # TikTok
 RE_TIKTOK_TTSTH = re.compile(r"\bTTSTH[0-9A-Z\-/]*\b", re.IGNORECASE)
+# Thai Happy Logistics (ค่าขนส่ง TikTok) — เช่น THJV202610004220868
+RE_TIKTOK_THJV = re.compile(r"\bTHJV\s*\d{10,20}\b", re.IGNORECASE)
 RE_TIKTOK_WORD = re.compile(r"\btiktok\b", re.IGNORECASE)
 
 # Shopee
@@ -343,6 +345,8 @@ def _weighted_score(t: str, filename: str) -> Dict[str, int]:
     # TIKTOK
     if _regex_hit(tt, RE_TIKTOK_TTSTH) or _regex_hit(fn, RE_TIKTOK_TTSTH):
         score["TIKTOK"] += 120
+    if _regex_hit(tt, RE_TIKTOK_THJV) or _regex_hit(fn, RE_TIKTOK_THJV):
+        score["TIKTOK"] += 120
     if _regex_hit(tt, RE_TIKTOK_WORD) or _regex_hit(fn, RE_TIKTOK_WORD):
         score["TIKTOK"] += 25
     score["TIKTOK"] += 10 * _count_contains(tt, TIKTOK_SIGS)
@@ -424,7 +428,10 @@ def classify_platform(text: str, filename: str = "", debug: bool = False) -> Pla
         ):
             return "LAZADA"
 
-        if _regex_hit(t, RE_TIKTOK_TTSTH) or _regex_hit(fn, RE_TIKTOK_TTSTH):
+        if (
+            _regex_hit(t, RE_TIKTOK_TTSTH) or _regex_hit(fn, RE_TIKTOK_TTSTH) or
+            _regex_hit(t, RE_TIKTOK_THJV) or _regex_hit(fn, RE_TIKTOK_THJV)
+        ):
             return "TIKTOK"
 
         # --------------------------
