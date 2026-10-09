@@ -53,12 +53,14 @@ except Exception:  # pragma: no cover
 try:
     from ..extractors.vendor_mapping import (
         get_vendor_code_by_platform,
+        get_wallet_code_by_platform,
         resolve_company_tag,
         detect_company_tag_from_text,
     )
     _VENDOR_MATRIX_OK = True
 except Exception:  # pragma: no cover
     get_vendor_code_by_platform = None  # type: ignore
+    get_wallet_code_by_platform = None  # type: ignore
     resolve_company_tag = None  # type: ignore
     detect_company_tag_from_text = None  # type: ignore
     _VENDOR_MATRIX_OK = False
@@ -188,6 +190,8 @@ RE_TTSTH_CORE = re.compile(r"(TTSTH\d{8,})", re.IGNORECASE)
 
 # Lazada invoice no มักเป็น THMPTI...
 RE_LAZ_INVOICE = re.compile(r"\b(THMPTI\d{10,})\b", re.IGNORECASE)
+# ใบเสร็จค่าขนส่ง: Lazada Express (THLPTR...) / Thai Happy Logistics ของ TikTok (THJV...)
+RE_SHIPPING_RECEIPT_CORE = re.compile(r"(THLPTR\d{10,}|THJV\d{10,})", re.IGNORECASE)
 
 # Generic: 32-hex md5-like (ไฟล์ hash)
 RE_HASH32 = re.compile(r"^[a-f0-9]{32}$", re.IGNORECASE)
@@ -231,7 +235,7 @@ def _normalize_reference_core(value: Any) -> str:
     s = _strip_ext(s)
 
     # ดึง core ถ้ามี
-    for pat in (RE_TRS_CORE, RE_RCS_CORE, RE_TTSTH_CORE, RE_LAZ_INVOICE):
+    for pat in (RE_TRS_CORE, RE_RCS_CORE, RE_TTSTH_CORE, RE_LAZ_INVOICE, RE_SHIPPING_RECEIPT_CORE):
         m = pat.search(s)
         if m:
             return _compact_no_ws(m.group(1))
@@ -411,6 +415,8 @@ def _score_reference(platform: str, ref: str) -> int:
         return 85
     if RE_LAZ_INVOICE.match(r):
         return 90
+    if RE_SHIPPING_RECEIPT_CORE.fullmatch(r):
+        return 85
 
     # Lazada: ถ้าเป็น Marketplace ให้ favor invoice-like token
     if p == "LAZADA":
@@ -668,6 +674,65 @@ def _looks_like_platform_name(v: str) -> bool:
     }
 
 
+def _row_vendor_platform(row: Dict[str, Any], platform: str = "") -> str:
+    # extractor ระบุผู้ขายย่อยได้ (เช่น Lazada Express ภายใต้ route LAZADA)
+    return (
+        str(row.get("_vendor_platform") or "")
+        or platform
+        or str(row.get("_platform") or row.get("_platform_route") or "")
+    ).strip()
+
+
+def _resolve_company(text: str, client_tax_id: str, cfg: Dict[str, Any]) -> Tuple[str, str]:
+    """คืน (client_tax_id, company_tag) ของบริษัทเรา (ผู้ซื้อ)"""
+    # resolve client tax id (from arg -> detect from text)
+    ctax = (client_tax_id or "").strip()
+    if not ctax and detect_client_from_context is not None:
+        try:
+            ctax = detect_client_from_context(text) or ""
+        except Exception:
+            ctax = ""
+
+    # resolve company tag ตามลำดับความน่าเชื่อถือ:
+    #   1) เลขภาษีผู้ซื้อในเอกสาร (รองรับ Hashtag ด้วย) — เดาได้เองแม้ "ไม่เลือกบริษัท"
+    #   2) บริษัทเดียวที่เลือกใน UI
+    ctag = ""
+    if _VENDOR_MATRIX_OK and detect_company_tag_from_text is not None:
+        try:
+            ctag = detect_company_tag_from_text(text) or ""
+        except Exception:
+            ctag = ""
+    if not ctag:
+        ctag = _single_client_tag_from_cfg(cfg or {})
+    return ctax, ctag
+
+
+def _apply_wallet_matrix(
+    row: Dict[str, Any],
+    text: str,
+    client_tax_id: str,
+    *,
+    platform: str = "",
+    cfg: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Q_payment_method = wallet ของ (แพลตฟอร์ม × บริษัท) — ทับค่าเดิมเมื่อแมปได้"""
+    if not isinstance(row, dict) or get_wallet_code_by_platform is None:
+        return row
+    platform = _row_vendor_platform(row, platform)
+    ctax, ctag = _resolve_company(text, client_tax_id, cfg or {})
+    if not platform or not (ctax or ctag):
+        return row
+    try:
+        code = get_wallet_code_by_platform(platform, client_tax_id=ctax, client_tag=ctag) or ""
+    except Exception:
+        code = ""
+    if code:
+        row["Q_payment_method"] = code
+        if os.getenv("STORE_WALLET_MAPPING_META", "1") == "1":
+            row["_wallet_code_resolved"] = code
+    return row
+
+
 def _apply_vendor_code_mapping(
     row: Dict[str, Any],
     text: str,
@@ -687,32 +752,9 @@ def _apply_vendor_code_mapping(
         return row
 
     cfg = cfg or {}
-    # extractor ระบุผู้ขายย่อยได้ (เช่น Lazada Express ภายใต้ route LAZADA)
-    platform = (
-        str(row.get("_vendor_platform") or "")
-        or platform
-        or str(row.get("_platform") or row.get("_platform_route") or "")
-    ).strip()
+    platform = _row_vendor_platform(row, platform)
 
-    # resolve client tax id (from arg -> detect from text)
-    ctax = (client_tax_id or "").strip()
-    if not ctax and detect_client_from_context is not None:
-        try:
-            ctax = detect_client_from_context(text) or ""
-        except Exception:
-            ctax = ""
-
-    # resolve company tag ตามลำดับความน่าเชื่อถือ:
-    #   1) เลขภาษีผู้ซื้อในเอกสาร (รองรับ Hashtag ด้วย) — เดาได้เองแม้ "ไม่เลือกบริษัท"
-    #   2) บริษัทเดียวที่เลือกใน UI
-    ctag = ""
-    if _VENDOR_MATRIX_OK and detect_company_tag_from_text is not None:
-        try:
-            ctag = detect_company_tag_from_text(text) or ""
-        except Exception:
-            ctag = ""
-    if not ctag:
-        ctag = _single_client_tag_from_cfg(cfg)
+    ctax, ctag = _resolve_company(text, client_tax_id, cfg)
 
     vtax = str(row.get("E_tax_id_13") or "").strip()
 
@@ -1693,7 +1735,8 @@ def extract_row(
     # 6) vendor mapping pass (force Cxxxxx) — sets ONLY D_vendor_code
     row = _apply_vendor_code_mapping(row, text, client_tax_id, platform=platform_out, cfg=cfg)
 
-    # 7) payment method normalize (pre-finalize)
+    # 7) payment method: wallet ตาม (แพลตฟอร์ม × บริษัท) ก่อน แล้วค่อย normalize แบบเดิม
+    row = _apply_wallet_matrix(row, text, client_tax_id, platform=platform_out, cfg=cfg)
     row = _apply_payment_method_mapping(row, text)
 
     # 8) ✅ FINALIZE + LOCK (MUST PASS cfg + filename)

@@ -21,13 +21,19 @@ except Exception:
 # Invoice number seen on doc: TTSTH20250008665805 (or similar)
 RE_TIKTOK_INVOICE_NO = re.compile(r"\bTTSTH\d{8,}\b", re.IGNORECASE)
 
+# Thai Happy Logistics (ค่าขนส่ง TikTok) — Receipt ไม่มี VAT
+VENDOR_THAI_HAPPY = "0105566107906"
+RE_THAI_HAPPY_RECEIPT_NO = re.compile(r"\bTHJV\d{10,}\b", re.IGNORECASE)
+RE_THAI_HAPPY_NAME = re.compile(r"Thai\s*Happy\s*Logistics|ไทย\s*แฮปปี้\s*โลจิสติกส์", re.IGNORECASE)
+RE_THAI_HAPPY_TOTAL = re.compile(r"Total\s*Amount\s*฿?\s*([0-9,]+\.[0-9]{2})", re.IGNORECASE)
+
 # Header label lines
 RE_INVOICE_NUMBER_LINE = re.compile(
     r"(invoice\s*(?:no|number))\s*[:：#\-]?\s*([A-Za-z0-9][A-Za-z0-9\-_\/]{6,})",
     re.IGNORECASE,
 )
 RE_INVOICE_DATE_LINE = re.compile(
-    r"(invoice\s*date)\s*[:：\-]?\s*(.+)",
+    r"(invoice\s*date|receipt\s*date)\s*[:：\-]?\s*(.+)",
     re.IGNORECASE,
 )
 
@@ -211,12 +217,19 @@ def _blank_row() -> Dict[str, Any]:
     }
 
 
+def _is_thai_happy(t: str, filename: str = "") -> bool:
+    if RE_THAI_HAPPY_RECEIPT_NO.search(t or "") or RE_THAI_HAPPY_RECEIPT_NO.search(filename or ""):
+        return True
+    return VENDOR_THAI_HAPPY in (t or "") or bool(RE_THAI_HAPPY_NAME.search(t or ""))
+
+
 def _extract_invoice_no(t: str) -> str:
     if not t:
         return ""
-    m = RE_TIKTOK_INVOICE_NO.search(t)
-    if m:
-        return _compact_no_ws(m.group(0))
+    for rx in (RE_TIKTOK_INVOICE_NO, RE_THAI_HAPPY_RECEIPT_NO):
+        m = rx.search(t)
+        if m:
+            return _compact_no_ws(m.group(0))
 
     m2 = RE_INVOICE_NUMBER_LINE.search(t)
     if m2:
@@ -302,16 +315,13 @@ def extract_tiktok(
     cfg = cfg or {}
     t = normalize_text(text or "")
     row = _blank_row()
+    is_thai_happy = _is_thai_happy(t, filename)
+    if is_thai_happy:
+        # extract_service ใช้ค่านี้เลือกแถว THAI_HAPPY_LOGISTICS ในตาราง vendor code / wallet
+        row["_vendor_platform"] = "THAI_HAPPY_LOGISTICS"
 
     if not t.strip():
-        return finalize_row(
-            row,
-            platform="TIKTOK",
-            text=t,
-            filename=filename,
-            client_tax_id=client_tax_id,
-            cfg=cfg,
-        )
+        return finalize_row(row, filename=filename, cfg=cfg, platform="TIKTOK")
 
     # --- Invoice number / reference ---
     inv_no = _extract_invoice_no(t)
@@ -340,6 +350,10 @@ def extract_tiktok(
 
     # --- Amounts ---
     subtotal_ex, vat_amt, total_incl = _extract_amounts_summary(t)
+    if is_thai_happy:
+        m_total = RE_THAI_HAPPY_TOTAL.search(t)
+        if m_total:
+            total_incl = _money_to_str(m_total.group(1))
 
     # IMPORTANT:
     # - Put gross incl VAT in R_paid_amount so finalize_row can subtract WHT correctly
@@ -348,7 +362,7 @@ def extract_tiktok(
         row["R_paid_amount"] = total_incl
 
     row["J_price_type"] = "1"
-    row["O_vat_rate"] = "7%"
+    row["O_vat_rate"] = "NO" if is_thai_happy else "7%"
 
     # --- WHT (TikTok often 3% with explicit amount) ---
     rate_str, wht_amt = _extract_wht_from_text_best_effort(t)
@@ -388,11 +402,4 @@ def extract_tiktok(
     if not row["G_invoice_no"] and row["C_reference"]:
         row["G_invoice_no"] = row["C_reference"]
 
-    return finalize_row(
-        row,
-        platform="TIKTOK",
-        text=t,
-        filename=filename,
-        client_tax_id=client_tax_id,
-        cfg=cfg,
-    )
+    return finalize_row(row, filename=filename, cfg=cfg, platform="TIKTOK")

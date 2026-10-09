@@ -188,6 +188,36 @@ def get_vendor_code_by_platform(platform: str, *, client_tax_id: str = "", clien
 
 
 # ============================================================
+# ✅ Wallet Matrix (Q_payment_method) — 1 wallet ต่อ (แพลตฟอร์ม × บริษัท)
+# เลข EWL แยกตามสมุดบัญชี PEAK ของแต่ละบริษัท (เลขซ้ำข้ามบริษัทได้)
+# ============================================================
+WALLET_CODE_MATRIX: Dict[str, Dict[str, str]] = {
+    "SHOPEE":  {TAG_SHD: "EWL029", TAG_RABBIT: "EWL032", TAG_TOPONE: "EWL012", TAG_HASHTAG: "EWL005"},
+    "LAZADA":  {TAG_SHD: "EWL030", TAG_RABBIT: "EWL033", TAG_TOPONE: "EWL013", TAG_HASHTAG: "EWL006"},
+    "TIKTOK":  {TAG_SHD: "EWL031", TAG_RABBIT: "EWL034", TAG_TOPONE: "EWL014", TAG_HASHTAG: "EWL007"},
+    "SHOPIFY": {TAG_SHD: "EWL032", TAG_RABBIT: "EWL035"},
+}
+
+# ค่าขนส่งตัดจากยอดขายของแพลตฟอร์มแม่ -> ใช้ wallet เดียวกัน
+_WALLET_PLATFORM_PARENT: Dict[str, str] = {
+    "SPX": "SHOPEE",
+    "LAZADA_EXPRESS": "LAZADA",
+    "THAI_HAPPY_LOGISTICS": "TIKTOK",
+}
+
+
+def get_wallet_code_by_platform(platform: str, *, client_tax_id: str = "", client_tag: str = "") -> str:
+    """(platform × company) -> EWLxxx ; คืน "" ถ้าแมปไม่ได้"""
+    tag = resolve_company_tag(client_tax_id=client_tax_id, client_tag=client_tag)
+    if not tag:
+        return ""
+    p = _norm_name(platform).upper().strip()
+    pkey = "SHOPIFY" if "SHOPIFY" in p else _norm_platform_key(platform)
+    pkey = _WALLET_PLATFORM_PARENT.get(pkey, pkey)
+    return WALLET_CODE_MATRIX.get(pkey, {}).get(tag, "")
+
+
+# ============================================================
 # Vendor Name -> Vendor Tax ID mapping (fallback by name)
 # ============================================================
 VENDOR_NAME_TO_TAX: Dict[str, str] = {
@@ -772,6 +802,8 @@ def format_short_description(platform: str, fee_type: str = "", seller_info: str
 __all__ = [
     "get_vendor_code",
     "get_vendor_code_by_platform",
+    "get_wallet_code_by_platform",
+    "WALLET_CODE_MATRIX",
     "resolve_company_tag",
     "detect_company_tag_from_text",
     "VENDOR_CODE_MATRIX",
