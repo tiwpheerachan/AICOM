@@ -446,7 +446,8 @@ def extract_lazada(text: str, client_tax_id: str = "", filename: str = "") -> Di
         # STEP 5: PEAK mapping (strict)
         # --------------------------
         row["M_qty"] = "1"
-        row["J_price_type"] = "1"
+        # ใบเสร็จค่าขนส่งไม่มี VAT -> ประเภทราคา 3 (ไม่มีภาษี)
+        row["J_price_type"] = "3" if is_lex else "1"
         row["O_vat_rate"] = "NO" if is_lex else "7%"
         row["Q_payment_method"] = "หักจากยอดขาย"
 

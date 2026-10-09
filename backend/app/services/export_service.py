@@ -138,6 +138,8 @@ RE_TRS_CORE = re.compile(r"(TRS[A-Z0-9\-_/.]{10,})", re.IGNORECASE)
 RE_RCS_CORE = re.compile(r"(RCS[A-Z0-9\-_/.]{10,})", re.IGNORECASE)
 RE_TTSTH_CORE = re.compile(r"(TTSTH\d{10,})", re.IGNORECASE)
 RE_LAZ_CORE = re.compile(r"(THMPTI\d{16}|(?:LAZ|LZD)[A-Z0-9\-_/.]{6,}|INV[A-Z0-9\-_/.]{6,})", re.IGNORECASE)
+# ใบเสร็จค่าขนส่ง: Lazada Express (THLPTR...) / Thai Happy Logistics (THJV...)
+RE_SHIPPING_RECEIPT_CORE = re.compile(r"(THLPTR\d{10,}|THJV\d{10,})", re.IGNORECASE)
 
 RE_LEADING_NOISE_PREFIX = re.compile(
     r"^(?:Shopee-)?TI[VR]-|^Shopee-|^TIV-|^TIR-|^SPX-|^LAZ-|^LZD-|^TikTok-",
@@ -170,7 +172,7 @@ def _normalize_reference_core(value: Any) -> str:
     s = _strip_ext(s)
 
     # ถ้ามี core ฝังอยู่ ให้ดึง core นั้น
-    for pat in (RE_TRS_CORE, RE_RCS_CORE, RE_TTSTH_CORE, RE_LAZ_CORE):
+    for pat in (RE_TRS_CORE, RE_RCS_CORE, RE_TTSTH_CORE, RE_LAZ_CORE, RE_SHIPPING_RECEIPT_CORE):
         m = pat.search(s)
         if m:
             return _compact_no_ws(m.group(1))
@@ -336,12 +338,12 @@ def _sync_amount_fields(rr: Dict[str, Any]) -> None:
     n = _parse_amount(n_raw)
     r = _parse_amount(r_raw)
 
+    # เติมเฉพาะช่องที่ว่าง — ห้ามบังคับ N = R เพราะเมื่อหัก ณ ที่จ่าย
+    # N ต้องเป็นยอดเต็ม และ R = N - WHT (extract_service จัดการให้แล้ว)
     if not n and r:
         n = r
     if not r and n:
         r = n
-    if n and r and n != r:
-        n = r
 
     rr["N_unit_price"] = n or "0.00"
     rr["R_paid_amount"] = r or "0.00"

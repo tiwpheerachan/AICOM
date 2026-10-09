@@ -793,6 +793,11 @@ def process_job_files(job_service, job_id: str) -> None:
                 if isinstance(base_row, dict):
                     row.update(base_row)
 
+                # wallet จาก (แพลตฟอร์ม × บริษัท) ใน extract_service มาก่อน mapping ร้านแบบเดิม
+                base_wallet = _safe_str(row.get("Q_payment_method"))
+                if base_wallet.upper().startswith("EWL"):
+                    wallet_code = base_wallet
+
                 if wallet_code:
                     row["Q_payment_method"] = wallet_code
 
