@@ -361,7 +361,8 @@ def extract_tiktok(
         row["N_unit_price"] = total_incl
         row["R_paid_amount"] = total_incl
 
-    row["J_price_type"] = "1"
+    # ใบเสร็จค่าขนส่งไม่มี VAT -> ประเภทราคา 3 (ไม่มีภาษี)
+    row["J_price_type"] = "3" if is_thai_happy else "1"
     row["O_vat_rate"] = "NO" if is_thai_happy else "7%"
 
     # --- WHT (TikTok often 3% with explicit amount) ---

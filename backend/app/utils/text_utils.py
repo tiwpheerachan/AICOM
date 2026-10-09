@@ -31,7 +31,7 @@ THAI_TO_ARABIC = str.maketrans(THAI_DIGITS, ARABIC_DIGITS)
 # Common punctuation variants
 # -------------------------
 # dash variants: hyphen, en-dash, em-dash, minus, Thai dash, fullwidth hyphen
-_DASH_CHARS = "\u2010\u2011\u2012\u2013\u2014\u2212\uFE63\uFF0D\u0E3F"
+_DASH_CHARS = "\u2010\u2011\u2012\u2013\u2014\u2212\uFE63\uFF0D"  # ห้ามใส่ \u0E3F (฿) — ทำให้ยอดเงินกลายเป็นติดลบ
 RE_DASHES = re.compile(rf"[{_DASH_CHARS}]+")
 RE_MULTI_SPACE = re.compile(r"[ \t]+")
 RE_ALL_WS = re.compile(r"\s+")
